@@ -1,0 +1,51 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Build output
+dist/
+dist-ssr/
+*.local
+
+# Environment & secrets — NEVER commit real Firebase credentials
+.env
+.env.*
+!.env.example
+
+# Firebase local artifacts & service accounts
+.firebase/
+firebase-debug.log
+firestore-debug.log
+ui-debug.log
+storage-debug.log
+*-service-account*.json
+serviceAccountKey*.json
+.firebaserc.local
+
+# Editor / OS
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Testing
+playwright-report/
+test-results/
+/coverage
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# TS build info
+*.tsbuildinfo

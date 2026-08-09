@@ -1,0 +1,100 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    color-scheme: light;
+  }
+
+  * {
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  html {
+    scroll-behavior: smooth;
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    @apply bg-canvas text-ink font-sans antialiased;
+    font-feature-settings: 'cv02', 'cv03', 'cv04', 'ss01';
+    text-rendering: optimizeLegibility;
+  }
+
+  /* Respect users who prefer reduced motion. */
+  @media (prefers-reduced-motion: reduce) {
+    html {
+      scroll-behavior: auto;
+    }
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.001ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.001ms !important;
+    }
+  }
+
+  ::selection {
+    @apply bg-ink text-canvas;
+  }
+
+  /* Consistent, understated focus rings for keyboard users. */
+  :focus-visible {
+    @apply outline-none ring-2 ring-accent/60 ring-offset-2 ring-offset-canvas;
+  }
+
+  h1,
+  h2,
+  h3,
+  h4 {
+    @apply font-display text-ink;
+    text-wrap: balance;
+  }
+
+  /* Firefox scrollbar restraint on horizontally scrolling regions. */
+  .scroll-x {
+    scrollbar-width: thin;
+  }
+}
+
+@layer components {
+  .container-page {
+    @apply mx-auto w-full max-w-container px-5 sm:px-6 lg:px-8;
+  }
+
+  .eyebrow {
+    @apply inline-flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.18em] text-ink-500;
+  }
+
+  .hairline {
+    @apply border-line;
+  }
+
+  .link-underline {
+    @apply relative text-ink transition-colors hover:text-accent;
+  }
+
+  /* Section reveal-on-scroll baseline (activated by IntersectionObserver). */
+  .reveal {
+    opacity: 0;
+    transform: translateY(14px);
+    transition:
+      opacity 0.7s cubic-bezier(0.16, 1, 0.3, 1),
+      transform 0.7s cubic-bezier(0.16, 1, 0.3, 1);
+    will-change: opacity, transform;
+  }
+
+  .reveal.is-visible {
+    opacity: 1;
+    transform: none;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .reveal {
+      opacity: 1;
+      transform: none;
+    }
+  }
+}
