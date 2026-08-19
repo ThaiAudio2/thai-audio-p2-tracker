@@ -25,6 +25,11 @@ html = html
   .replace('<script type="module" src="assets/app.js"></script>',
            `<script>\n/* ===== data ===== */\n${data}\n/* ===== app ===== */\n${app}\n</script>`);
 
+import { mkdirSync } from 'node:fs';
 const out = join(root, 'thai-audio-p2-tracker.html');
 writeFileSync(out, html);
-console.log('wrote', out, '(' + Math.round(html.length / 1024) + ' KB)');
+// Also emit dist/index.html — a drop-ready file whose name makes it the site's
+// home page on Netlify Drop (the root only serves a file named index.html).
+mkdirSync(join(root, 'dist'), { recursive: true });
+writeFileSync(join(root, 'dist', 'index.html'), html);
+console.log('wrote', out, 'and dist/index.html (' + Math.round(html.length / 1024) + ' KB)');
