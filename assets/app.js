@@ -50,7 +50,7 @@ function ownersToArray(o) {
   return Object.entries(o).filter(([, v]) => v).map(([k, v]) => ({ role: ROLE_KEYS[k] || k, who: v }));
 }
 function seedBoard() {
-  return MILESTONES.map((m) => ({
+  return ensureSubtasks(MILESTONES.map((m) => ({
     id: m.id, no: m.no, name: m.name, phase: m.phase || '',
     desc: clone(DESCRIPTIONS[m.id]) || { th: '', en: '' },
     tasks: m.tasks.map((t) => ({
@@ -63,7 +63,20 @@ function seedBoard() {
       schedule: SCHEDULE[t.id] ? clone(SCHEDULE[t.id]) : null,
       status: 'NS', note: '', days: {},
     })),
-  }));
+  })));
+}
+// Turn each task's sub-points (lines) into sub-tasks that carry their own
+// status/notes/painted days. Deterministic ids (parentId::sN) so every client
+// migrates an old board identically. Idempotent — leaves existing sub-tasks.
+function ensureSubtasks(board) {
+  for (const m of board) for (const t of (m.tasks || [])) {
+    if ((!t.subtasks || !t.subtasks.length) && t.lines && t.lines.length) {
+      t.subtasks = t.lines.map((l, i) => ({ id: `${t.id}::s${i}`, title: l, status: 'NS', note: '', days: {} }));
+    }
+    if (!Array.isArray(t.subtasks)) t.subtasks = [];
+    delete t.lines;
+  }
+  return board;
 }
 function applyLegacy(board, legacy) {
   if (!legacy) return;
@@ -75,10 +88,16 @@ function applyLegacy(board, legacy) {
   }
 }
 function loadLocal() {
-  try { const raw = JSON.parse(localStorage.getItem(STORE_KEY)); if (raw && Array.isArray(raw.board)) return raw.board; } catch {}
+  try { const raw = JSON.parse(localStorage.getItem(STORE_KEY)); if (raw && Array.isArray(raw.board)) return ensureSubtasks(raw.board); } catch {}
   const board = seedBoard();
   try { const legacy = JSON.parse(localStorage.getItem(LEGACY_KEY)); applyLegacy(board, legacy); } catch {}
   return board;
+}
+// find a task or sub-task by id; parentTask is set when it's a sub-task.
+function findAny(id) {
+  const ft = findTask(id); if (ft) return { node: ft.t, parentTask: null };
+  for (const m of BOARD) for (const t of m.tasks) if (t.subtasks) { const s = t.subtasks.find((x) => x.id === id); if (s) return { node: s, parentTask: t }; }
+  return null;
 }
 let BOARD = loadLocal();
 const saveLocal = () => localStorage.setItem(STORE_KEY, JSON.stringify({ board: BOARD }));
@@ -114,10 +133,19 @@ const statusColor = (t) => byKey[t.status || 'NS'].color;
 const ownerNames = (t) => (t.owners || []).map((o) => o.who);
 
 /* ---------------- metrics ---------------- */
+// A "unit" of progress is a sub-task (when a task has them) or a leaf task.
+function units() {
+  const u = [];
+  for (const m of BOARD) for (const t of m.tasks) {
+    if (t.subtasks && t.subtasks.length) u.push(...t.subtasks);
+    else u.push(t);
+  }
+  return u;
+}
 function metrics() {
-  const tasks = allTasks(); const total = tasks.length; let done = 0, active = 0;
+  const u = units(); const total = u.length; let done = 0, active = 0;
   const dist = Object.fromEntries(STATUSES.map((s) => [s.key, 0]));
-  for (const { t } of tasks) { const k = t.status || 'NS'; dist[k] = (dist[k] || 0) + 1; if (byKey[k]?.done) done++; else if (k !== 'NS' && !byKey[k]?.stopped) active++; }
+  for (const n of u) { const k = n.status || 'NS'; dist[k] = (dist[k] || 0) + 1; if (byKey[k]?.done) done++; else if (k !== 'NS' && !byKey[k]?.stopped) active++; }
   return { total, done, active, pct: total ? Math.round((done / total) * 100) : 0, dist };
 }
 
@@ -154,14 +182,28 @@ function renderFilters() {
 /* ---------------- schedule / painting ---------------- */
 function schedKind(t) { const s = t.schedule; if (!s) return 'none'; if (s.conditional) return 'conditional'; if (s.start && s.start > GRID_END) return 'future'; return 'grid'; }
 function defaultActive(t, day) { const s = t.schedule; if (!s || s.conditional) return false; if (s.start && day.iso < s.start) return false; if (s.end && day.iso > s.end) return false; if (s.weekdays && !s.weekdays.includes(day.dow)) return false; return true; }
-// Per-day status: an override in t.days[iso] wins (0 = explicitly cleared,
-// a status key = that status; legacy 1 = working day). Otherwise a scheduled
-// day defaults to the task's overall status (or WD before one is set).
-function dayStatusOf(t, day) {
-  const o = t.days ? t.days[day.iso] : undefined;
+// Per-day status of a node (a task or a sub-task). schedOwner holds the
+// schedule (the task itself, or the parent task for a sub-task). An override
+// in node.days[iso] wins (0 = cleared; legacy 1 = working day); otherwise a
+// scheduled day defaults to the node's overall status (or WD before one is set).
+function dayStatusOfNode(node, schedOwner, day) {
+  const o = node.days ? node.days[day.iso] : undefined;
   if (o !== undefined) { if (o === 0 || o === '0' || o === false) return null; if (o === 1 || o === true) return 'WD'; return byKey[o] ? o : null; }
-  if (!defaultActive(t, day)) return null;
-  return t.status && t.status !== 'NS' ? t.status : 'WD';
+  if (!defaultActive(schedOwner, day)) return null;
+  return node.status && node.status !== 'NS' ? node.status : 'WD';
+}
+// Parent roll-up (a task with sub-tasks): status derived from its sub-tasks…
+function parentStatus(t) {
+  const subs = t.subtasks || []; if (!subs.length) return t.status || 'NS';
+  let allTC = true, anyLive = false;
+  for (const s of subs) { const k = s.status || 'NS'; if (k !== 'TC') allTC = false; if (k !== 'NS' && k !== 'CA') anyLive = true; }
+  return allTC ? 'TC' : (anyLive ? 'IP' : 'NS');
+}
+// …and each day: a union of its sub-tasks' days (all done → TC, else in-progress).
+function parentDayStatus(t, day) {
+  let any = false, allTC = true;
+  for (const s of (t.subtasks || [])) { const st = dayStatusOfNode(s, t, day); if (st != null) { any = true; if (st !== 'TC') allTC = false; } }
+  return any ? (allTC ? 'TC' : 'IP') : null;
 }
 
 /* ---------------- board render ---------------- */
@@ -176,43 +218,70 @@ function headerHTML() {
       <div class="g-headcols"><div class="g-weeks">${weeks}</div><div class="g-days">${days}</div></div></div>`;
 }
 
-function cellsHTML(t) {
-  let out = '';
-  DAYS.forEach((d, i) => {
-    const st = dayStatusOf(t, d);
-    const on = st != null;
-    const prev = i > 0 && dayStatusOf(t, DAYS[i - 1]) != null;
-    const next = i < DAYS.length - 1 && dayStatusOf(t, DAYS[i + 1]) != null;
-    const color = on ? byKey[st].color : '';
+// Clickable cells for a node (task or sub-task). schedOwner supplies the schedule.
+function cellsHTML(node, schedOwner) {
+  const at = DAYS.map((d) => dayStatusOfNode(node, schedOwner, d));
+  return DAYS.map((d, i) => {
+    const st = at[i]; const on = st != null;
+    const prev = i > 0 && at[i - 1] != null, next = i < DAYS.length - 1 && at[i + 1] != null;
     const cls = ['g-cell', d.isWeekend ? 'wknd' : '', d.isToday ? 'today' : '', on ? 'on' : '', on && !prev ? 'st' : '', on && !next ? 'en' : ''].filter(Boolean).join(' ');
-    out += `<div class="${cls}" data-cell="${t.id}" data-iso="${d.iso}" ${on ? `style="--c:${color}"` : ''}>${on ? `<span class="cc">${st}</span>` : ''}</div>`;
-  });
-  return out;
+    return `<div class="${cls}" data-cell="${node.id}" data-iso="${d.iso}" ${on ? `style="--c:${byKey[st].color}"` : ''}>${on ? `<span class="cc">${st}</span>` : ''}</div>`;
+  }).join('');
+}
+// Read-only roll-up cells for a parent task (computed from its sub-tasks).
+function cellsRollupHTML(t) {
+  const at = DAYS.map((d) => parentDayStatus(t, d));
+  return DAYS.map((d, i) => {
+    const st = at[i]; const on = st != null;
+    const prev = i > 0 && at[i - 1] != null, next = i < DAYS.length - 1 && at[i + 1] != null;
+    const cls = ['g-cell', 'rollup', d.isWeekend ? 'wknd' : '', d.isToday ? 'today' : '', on ? 'on' : '', on && !prev ? 'st' : '', on && !next ? 'en' : ''].filter(Boolean).join(' ');
+    return `<div class="${cls}" ${on ? `style="--c:${byKey[st].color}"` : ''}>${on ? `<span class="cc">${st}</span>` : ''}</div>`;
+  }).join('');
 }
 
 function taskRowHTML(t) {
-  const kind = schedKind(t); const cur = t.status || 'NS'; const done = !!byKey[cur]?.done;
+  const hasSub = t.subtasks && t.subtasks.length;
+  const kind = schedKind(t); const cur = hasSub ? parentStatus(t) : (t.status || 'NS'); const done = !!byKey[cur]?.done;
   const owners = (t.owners || []).map((o) => `<span class="owner"><b>${esc(o.role)}</b> ${esc(o.who)}</span>`).join('');
   const laterTag = kind === 'future' ? `<span class="tag future">→ ${MONTHS[+t.schedule.start.slice(5, 7) - 1]} ${t.schedule.start.slice(0, 4)}</span>` : kind === 'conditional' ? `<span class="tag cond">as needed</span>` : '';
   const isExp = expanded.has(t.id) || editing;
-  return `<div class="g-row ${done ? 'done' : ''}" data-row="${t.id}">
+  const statusCtl = hasSub
+    ? `<span class="status-chip" style="--st:${byKey[cur].color}" title="rolled up from ${t.subtasks.length} sub-tasks">${cur === 'NS' ? '—' : cur} · ${byKey[cur].label}</span>`
+    : `<select class="status-select" data-status="${t.id}" style="--st:${byKey[cur].color}">
+            ${STATUSES.map((o) => `<option value="${o.key}" ${o.key === cur ? 'selected' : ''}>${o.key === 'NS' ? '— Not started' : `${o.key} · ${o.label}`}</option>`).join('')}
+          </select>`;
+  let html = `<div class="g-row ${done ? 'done' : ''} ${hasSub ? 'parent' : ''}" data-row="${t.id}">
       <div class="g-info">
         <button class="g-title ${isExp ? 'open' : ''}" data-toggle="${t.id}">
           <svg class="tw" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M9 6l6 6-6 6"/></svg>
-          <span>${esc(t.title)}</span>${laterTag}</button>
-        <div class="g-owner-row">
-          <select class="status-select" data-status="${t.id}" style="--st:${byKey[cur].color}">
-            ${STATUSES.map((o) => `<option value="${o.key}" ${o.key === cur ? 'selected' : ''}>${o.key === 'NS' ? '— Not started' : `${o.key} · ${o.label}`}</option>`).join('')}
+          <span>${esc(t.title)}</span>${hasSub ? `<span class="subcount">${t.subtasks.length}</span>` : ''}${laterTag}</button>
+        <div class="g-owner-row">${statusCtl}${owners ? `<div class="owner-tags">${owners}</div>` : ''}</div>
+      </div>${hasSub ? cellsRollupHTML(t) : cellsHTML(t, t)}
+    </div>`;
+  if (isExp) {
+    if (hasSub) html += t.subtasks.map((s) => subRowHTML(s, t)).join('');
+    html += `<div class="g-detail" data-detail="${t.id}"><div class="g-detail-in">${editing ? taskEditHTML(t) : taskReadHTML(t)}</div></div>`;
+  }
+  return html;
+}
+
+function subRowHTML(s, parent) {
+  const cur = s.status || 'NS'; const done = !!byKey[cur]?.done;
+  return `<div class="g-row sub ${done ? 'done' : ''}" data-row="${s.id}">
+      <div class="g-info sub-info">
+        <span class="sub-dot"></span>
+        <div class="sub-main">
+          <div class="sub-title" title="${escAttr(s.title)}">${esc(s.title)}</div>
+          <select class="status-select mini" data-substatus="${s.id}" style="--st:${byKey[cur].color}">
+            ${STATUSES.map((o) => `<option value="${o.key}" ${o.key === cur ? 'selected' : ''}>${o.key === 'NS' ? '—' : o.key}</option>`).join('')}
           </select>
-          ${owners ? `<div class="owner-tags">${owners}</div>` : ''}
         </div>
-      </div>${cellsHTML(t)}
-    </div>${isExp ? `<div class="g-detail" data-detail="${t.id}"><div class="g-detail-in">${editing ? taskEditHTML(t) : taskReadHTML(t)}</div></div>` : ''}`;
+      </div>${cellsHTML(s, parent)}
+    </div>`;
 }
 
 function taskReadHTML(t) {
   let inner = t.desc && (t.desc.th || t.desc.en) ? `<div class="desc-block"><p class="th">${esc(t.desc.th)}</p><p class="en">${esc(t.desc.en)}</p></div>` : '';
-  if (t.lines?.length) inner += `<ul class="lines">${t.lines.map((x) => `<li>${esc(x)}</li>`).join('')}</ul>`;
   if (t.detail && Object.keys(t.detail).length) inner += `<div class="detail-groups">` + Object.entries(t.detail).map(([g, items]) => `<div class="detail-group"><div class="gh">${esc(g)}</div><ul>${items.map((i) => `<li>${esc(i)}</li>`).join('')}</ul></div>`).join('') + `</div>`;
   if (t.remarks?.length) inner += `<div class="remarks"><div class="rh">Remarks</div><ul>${t.remarks.map((r) => `<li>${esc(r)}</li>`).join('')}</ul></div>`;
   inner += `<div class="note-row"><span class="ni">✎</span><input class="note-input" data-note="${t.id}" type="text" placeholder="Add a note or update…" value="${escAttr(t.note)}"></div>`;
@@ -238,6 +307,9 @@ function taskEditHTML(t) {
       <input class="ef-in ef-gname" data-gid="${t.id}" data-gkey="${escAttr(g)}" value="${escAttr(g)}" placeholder="Group name">
       <button class="ef-x" data-gdel="${t.id}" data-gkey="${escAttr(g)}" title="Remove group">✕</button>
       <textarea class="ef-ta ef-gitems" data-gid="${t.id}" data-gkey="${escAttr(g)}" rows="3" placeholder="One item per line">${esc((items || []).join('\n'))}</textarea></div>`).join('');
+  const subs = (t.subtasks || []).map((s, i) => `<div class="ef-owner">
+      <input class="ef-in ef-stitle" data-stid="${t.id}" data-sidx="${i}" value="${escAttr(s.title)}" placeholder="Sub-task">
+      <button class="ef-x" data-sdel="${t.id}" data-sidx="${i}" title="Remove sub-task">✕</button></div>`).join('');
   return `<div class="ef">
     <label class="ef-l">Task title</label>
     <input class="ef-in" data-f="title" data-id="${t.id}" value="${escAttr(t.title)}">
@@ -255,10 +327,11 @@ function taskEditHTML(t) {
       <span>End <input type="date" class="ef-date" data-f="end" data-id="${t.id}" value="${escAttr(s.end || '')}"></span>
       <span class="ef-wds">only: ${WD_ORDER.map(([n, lbl]) => `<label><input type="checkbox" class="ef-wd" data-id="${t.id}" value="${n}" ${wdSet.has(n) ? 'checked' : ''}>${lbl}</label>`).join('')}</span>
     </div>
-    <div class="ef-2">
-      <div><label class="ef-l">Sub-points (one per line)</label><textarea class="ef-ta" data-f="lines" data-id="${t.id}" rows="3">${esc((t.lines || []).join('\n'))}</textarea></div>
-      <div><label class="ef-l">Remarks (one per line)</label><textarea class="ef-ta" data-f="remarks" data-id="${t.id}" rows="3">${esc((t.remarks || []).join('\n'))}</textarea></div>
-    </div>
+    <label class="ef-l">Sub-tasks (each gets its own day-row; the parent rolls them up)</label>
+    <div class="ef-subs">${subs}</div>
+    <button class="ef-add" data-sadd="${t.id}">+ Add sub-task</button>
+    <label class="ef-l">Remarks (one per line)</label>
+    <textarea class="ef-ta" data-f="remarks" data-id="${t.id}" rows="2">${esc((t.remarks || []).join('\n'))}</textarea>
     <label class="ef-l">Detail groups</label>
     <div class="ef-groups">${groups}</div>
     <button class="ef-add" data-gadd="${t.id}">+ Add group</button>
@@ -270,12 +343,17 @@ function taskEditHTML(t) {
   </div>`;
 }
 
-function msProgress(m) { const done = m.tasks.filter((t) => byKey[t.status || 'NS']?.done).length; return { done, total: m.tasks.length, pct: m.tasks.length ? Math.round((done / m.tasks.length) * 100) : 0 }; }
+function msProgress(m) {
+  let total = 0, done = 0;
+  for (const t of m.tasks) { const arr = (t.subtasks && t.subtasks.length) ? t.subtasks : [t]; for (const n of arr) { total++; if (byKey[n.status || 'NS']?.done) done++; } }
+  return { done, total, pct: total ? Math.round((done / total) * 100) : 0 };
+}
 
 function matches(t) {
   const q = $('#f-search').value.trim().toLowerCase(); const fs = $('#f-status').value, fo = $('#f-owner').value;
-  const hay = [t.title, t.desc?.th, t.desc?.en, ...(t.lines || []), ...Object.values(t.detail || {}).flat(), ...(t.remarks || []), ...ownerNames(t), t.note].join(' ').toLowerCase();
-  return (!q || hay.includes(q)) && (!fs || (t.status || 'NS') === fs) && (!fo || ownerNames(t).includes(fo));
+  const hay = [t.title, t.desc?.th, t.desc?.en, ...(t.subtasks || []).map((s) => s.title), ...Object.values(t.detail || {}).flat(), ...(t.remarks || []), ...ownerNames(t), t.note].join(' ').toLowerCase();
+  const statuses = (t.subtasks && t.subtasks.length) ? t.subtasks.map((s) => s.status || 'NS') : [t.status || 'NS'];
+  return (!q || hay.includes(q)) && (!fs || statuses.includes(fs)) && (!fo || ownerNames(t).includes(fo));
 }
 
 function msHeadHTML(m) {
@@ -331,12 +409,13 @@ function outsideDayMenu(e) { if (dayMenu && !dayMenu.contains(e.target)) closeDa
 function escDayMenu(e) { if (e.key === 'Escape') closeDayMenu(); }
 function openDayMenu(cell, id, iso) {
   closeDayMenu();
-  const f = findTask(id); if (!f) return;
+  const f = findAny(id); if (!f) return;
+  const node = f.node, schedOwner = f.parentTask || f.node;
   const day = DAYS.find((d) => d.iso === iso);
-  const cur = dayStatusOf(f.t, day);
+  const cur = dayStatusOfNode(node, schedOwner, day);
   const d = new Date(iso + 'T00:00:00');
   dayMenu = el('div', 'daymenu');
-  dayMenu.innerHTML = `<div class="dm-h"><b>${esc(f.t.title).slice(0, 34)}</b><span>${MONTHS[d.getMonth()]} ${d.getDate()} · ${['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][d.getDay()]}</span></div>
+  dayMenu.innerHTML = `<div class="dm-h"><b>${esc(node.title).slice(0, 34)}</b><span>${MONTHS[d.getMonth()]} ${d.getDate()} · ${['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][d.getDay()]}</span></div>
     <div class="dm-grid">${STATUSES.filter((s) => s.key !== 'NS').map((s) => `<button class="dm-b ${cur === s.key ? 'sel' : ''}" data-set="${s.key}"><span class="sw" style="background:${s.color}"></span><b>${s.key}</b> ${s.label}</button>`).join('')}</div>
     <button class="dm-clear" data-set="__clear">✕ Clear this day</button>`;
   document.body.appendChild(dayMenu);
@@ -348,8 +427,8 @@ function openDayMenu(cell, id, iso) {
   dayMenu.addEventListener('click', (e) => {
     const btn = e.target.closest('[data-set]'); if (!btn) return;
     const v = btn.dataset.set;
-    f.t.days = f.t.days || {};
-    if (v === '__clear') f.t.days[iso] = 0; else f.t.days[iso] = v;
+    node.days = node.days || {};
+    if (v === '__clear') node.days[iso] = 0; else node.days[iso] = v;
     commit(); rebuildBoard(); closeDayMenu();
   });
   setTimeout(() => { document.addEventListener('click', outsideDayMenu, true); document.addEventListener('keydown', escDayMenu); }, 0);
@@ -362,17 +441,19 @@ function wireBoard() {
   wrap.addEventListener('click', (e) => {
     const b = (a) => e.target.closest(`[${a}]`);
     let n;
-    if ((n = e.target.closest('.g-cell'))) { openDayMenu(n, n.dataset.cell, n.dataset.iso); return; }
+    if ((n = e.target.closest('.g-cell')) && n.dataset.cell) { openDayMenu(n, n.dataset.cell, n.dataset.iso); return; }
     if ((n = b('data-toggle'))) { const id = n.dataset.toggle; expanded.has(id) ? expanded.delete(id) : expanded.add(id); rebuildBoard(); return; }
     if ((n = b('data-mstoggle'))) { const id = n.dataset.mstoggle; collapsed.has(id) ? collapsed.delete(id) : collapsed.add(id); rebuildBoard(); return; }
     // edit ops
     if ((n = b('data-oadd'))) { findTask(n.dataset.oadd).t.owners.push({ role: '', who: '' }); commit(); rebuildBoard(); return; }
     if ((n = b('data-odel'))) { findTask(n.dataset.odel).t.owners.splice(+n.dataset.oidx, 1); commit(); rebuildBoard(); return; }
+    if ((n = b('data-sadd'))) { const t = findTask(n.dataset.sadd).t; t.subtasks = t.subtasks || []; t.subtasks.push({ id: uid('s-'), title: 'New sub-task', status: 'NS', note: '', days: {} }); commit(); refreshAll(); return; }
+    if ((n = b('data-sdel'))) { findTask(n.dataset.sdel).t.subtasks.splice(+n.dataset.sidx, 1); commit(); refreshAll(); return; }
     if ((n = b('data-gadd'))) { const t = findTask(n.dataset.gadd).t; t.detail = t.detail || {}; t.detail['New group ' + (Object.keys(t.detail).length + 1)] = []; commit(); rebuildBoard(); return; }
     if ((n = b('data-gdel'))) { delete findTask(n.dataset.gdel).t.detail[n.dataset.gkey]; commit(); rebuildBoard(); return; }
     if ((n = b('data-tup')) || (n = b('data-tdown'))) { const id = (n.dataset.tup || n.dataset.tdown); const dir = n.dataset.tup ? -1 : 1; const f = findTask(id); if (move(f.m.tasks, f.ti, dir)) { commit(); rebuildBoard(); } return; }
     if ((n = b('data-tdel'))) { const f = findTask(n.dataset.tdel); if (confirm('Delete this task?')) { f.m.tasks.splice(f.ti, 1); commit(); refreshAll(); } return; }
-    if ((n = b('data-taskadd'))) { const f = findMs(n.dataset.taskadd); f.m.tasks.push({ id: uid('t-'), title: 'New task', desc: { th: '', en: '' }, owners: [], lines: [], detail: {}, remarks: [], schedule: null, status: 'NS', note: '', days: {} }); commit(); refreshAll(); return; }
+    if ((n = b('data-taskadd'))) { const f = findMs(n.dataset.taskadd); f.m.tasks.push({ id: uid('t-'), title: 'New task', desc: { th: '', en: '' }, owners: [], subtasks: [], detail: {}, remarks: [], schedule: null, status: 'NS', note: '', days: {} }); commit(); refreshAll(); return; }
     if ((n = b('data-mup')) || (n = b('data-mdown'))) { const id = (n.dataset.mup || n.dataset.mdown); const dir = n.dataset.mup ? -1 : 1; const f = findMs(id); if (move(BOARD, f.mi, dir)) { commit(); rebuildBoard(); } return; }
     if ((n = b('data-mdel'))) { const f = findMs(n.dataset.mdel); if (confirm(`Delete milestone "${f.m.name}" and its ${f.m.tasks.length} tasks?`)) { BOARD.splice(f.mi, 1); commit(); refreshAll(); } return; }
     if (e.target.id === 'add-ms') { BOARD.push({ id: uid('m-'), no: String(BOARD.length), name: 'New milestone', phase: '', desc: { th: '', en: '' }, tasks: [] }); commit(); refreshAll(); return; }
@@ -383,11 +464,12 @@ function wireBoard() {
     const n = e.target;
     if (n.dataset.f && n.dataset.id) {
       const id = n.dataset.id, f = n.dataset.f;
-      if (f === 'lines' || f === 'remarks') setTaskField(id, f, n.value.split('\n').map((x) => x.trim()).filter(Boolean));
+      if (f === 'remarks') setTaskField(id, f, n.value.split('\n').map((x) => x.trim()).filter(Boolean));
       else setTaskField(id, f, n.value);
       if (f === 'title') { const row = wrap.querySelector(`.g-row[data-row="${CSS.escape(id)}"] .g-title span`); if (row) row.textContent = n.value; }
       return;
     }
+    if (n.classList.contains('ef-stitle')) { const t = findTask(n.dataset.stid).t; const s = t.subtasks[+n.dataset.sidx]; if (s) { s.title = n.value; commit(); const row = wrap.querySelector(`.g-row[data-row="${CSS.escape(s.id)}"] .sub-title`); if (row) row.textContent = n.value; } return; }
     if (n.dataset.mf && n.dataset.mid) { setMsField(n.dataset.mid, n.dataset.mf, n.value); return; }
     if (n.classList.contains('ef-oname')) { const f = findTask(n.dataset.oid); const o = f.t.owners[+n.dataset.oidx]; if (o) { o.who = n.value; commit(); } return; }
     if (n.classList.contains('ef-gitems')) { findTask(n.dataset.gid).t.detail[n.dataset.gkey] = n.value.split('\n').map((x) => x.trim()).filter(Boolean); commit(); return; }
@@ -397,6 +479,7 @@ function wireBoard() {
   wrap.addEventListener('change', (e) => {
     const n = e.target;
     if (n.classList.contains('ef-orole')) { const f = findTask(n.dataset.oid); const o = f.t.owners[+n.dataset.oidx]; if (o) { o.role = n.value; commit(); rebuildBoard(); } return; }
+    if (n.dataset.substatus) { const f = findAny(n.dataset.substatus); if (f) { f.node.status = n.value; commit(); refreshAll(); toast(`Status → ${byKey[n.value].label}`); } return; }
     if (n.dataset.status) { findTask(n.dataset.status).t.status = n.value; commit(); refreshAll(); toast(`Status → ${byKey[n.value].label}`); return; }
     if (n.dataset.note !== undefined && n.classList.contains('note-input')) { findTask(n.dataset.note).t.note = n.value.trim(); commit(); toast('Note saved'); return; }
     if (n.classList.contains('ef-gname')) { const t = findTask(n.dataset.gid).t; const old = n.dataset.gkey, val = n.value.trim() || 'group'; if (val !== old) { const items = t.detail[old]; delete t.detail[old]; t.detail[val] = items; commit(); rebuildBoard(); } return; }
@@ -453,7 +536,7 @@ function wireToolbar() {
   $('#import').addEventListener('click', () => $('#import-file').click());
   $('#import-file').addEventListener('change', (e) => {
     const file = e.target.files[0]; if (!file) return; const r = new FileReader();
-    r.onload = () => { try { const d = JSON.parse(r.result); if (Array.isArray(d.board)) BOARD = d.board; else if (Array.isArray(d)) BOARD = d; else throw 0; saveLocal(); pushBoard(); refreshAll(); toast('Board imported'); } catch { toast('Could not read that file'); } e.target.value = ''; };
+    r.onload = () => { try { const d = JSON.parse(r.result); if (Array.isArray(d.board)) BOARD = d.board; else if (Array.isArray(d)) BOARD = d; else throw 0; ensureSubtasks(BOARD); saveLocal(); pushBoard(); refreshAll(); toast('Board imported'); } catch { toast('Could not read that file'); } e.target.value = ''; };
     r.readAsText(file);
   });
   $('#reset').addEventListener('click', () => {
@@ -496,9 +579,10 @@ async function initRemote() {
     remote = { replaceBoard: (board) => fs.setDoc(ref, { board, updatedAt: fs.serverTimestamp() }, { merge: true }).catch((e) => { console.warn(e); setSync('error'); }) };
     const snap = await fs.getDoc(ref); const d0 = snap.data();
     if (!d0 || (!Array.isArray(d0.board) && !d0.tasks)) { pushBoard(); } // seed empty doc with our board
+    else if (Array.isArray(d0.board)) { const before = JSON.stringify(d0.board); const b = ensureSubtasks(d0.board); BOARD = b; saveLocal(); if (JSON.stringify(b) !== before) pushBoard(); refreshAll(); } // migrate old board (lines → sub-tasks)
     fs.onSnapshot(ref, (s) => {
       const d = s.data(); if (!d) return;
-      if (Array.isArray(d.board)) { const json = JSON.stringify(d.board); if (json !== lastPushed) { BOARD = d.board; saveLocal(); if (!editing) refreshAll(); } }
+      if (Array.isArray(d.board)) { const b = ensureSubtasks(d.board); const json = JSON.stringify(b); if (json !== lastPushed) { BOARD = b; saveLocal(); if (!editing) refreshAll(); } }
       else if (d.tasks) { applyLegacy(BOARD, d.tasks); saveLocal(); pushBoard(); refreshAll(); }
       setSync('synced');
     }, (err) => { console.warn('listen failed', err); setSync('error'); });
