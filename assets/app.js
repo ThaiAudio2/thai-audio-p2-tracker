@@ -146,15 +146,17 @@ const statusColor = (t) => byKey[t.status || 'NS'].color;
 const ownerNames = (t) => (t.owners || []).map((o) => o.who);
 
 /* ---------------- metrics ---------------- */
-// A "unit" of progress is a sub-task (when a task has them) or a leaf task.
-function units() {
-  const u = [];
-  for (const m of BOARD) for (const t of m.tasks) {
-    if (t.subtasks && t.subtasks.length) u.push(...t.subtasks);
-    else u.push(t);
-  }
-  return u;
+// A parent's status is "Auto" (rolled up from sub-tasks) unless the user picks
+// a real status, which overrides the roll-up.
+const hasManualStatus = (t) => t.subtasks && t.subtasks.length && t.status && t.status !== 'AUTO' && t.status !== 'NS' && byKey[t.status];
+function effStatus(t) {
+  if (t.subtasks && t.subtasks.length) return hasManualStatus(t) ? t.status : parentStatus(t);
+  return t.status || 'NS';
 }
+// Progress units: a manually-set parent counts as one; otherwise its sub-tasks;
+// a leaf task counts as itself.
+const taskUnits = (t) => (t.subtasks && t.subtasks.length && !hasManualStatus(t)) ? t.subtasks : [t];
+function units() { const u = []; for (const m of BOARD) for (const t of m.tasks) u.push(...taskUnits(t)); return u; }
 function metrics() {
   const u = units(); const total = u.length; let done = 0, active = 0;
   const dist = Object.fromEntries(STATUSES.map((s) => [s.key, 0]));
@@ -244,25 +246,37 @@ function cellsHTML(node, schedOwner) {
     return `<div class="${cls}" data-cell="${node.id}" data-iso="${d.iso}" ${on ? `style="--c:${byKey[st].color}"` : ''}>${on ? `<span class="cc">${st}</span>` : ''}</div>`;
   }).join('');
 }
-// Read-only roll-up cells for a parent task (computed from its sub-tasks).
-function cellsRollupHTML(t) {
-  const at = DAYS.map((d) => parentDayStatus(t, d));
+// A parent day: a manual per-day override wins; else if the parent's status is
+// set manually it behaves like a leaf; else it's the roll-up from sub-tasks.
+function parentCellStatus(t, day) {
+  const o = t.days ? t.days[day.iso] : undefined;
+  if (o !== undefined) { if (o === 0 || o === '0' || o === false) return null; if (o === 1 || o === true) return 'WD'; return byKey[o] ? o : null; }
+  if (hasManualStatus(t)) return dayStatusOfNode(t, t, day);
+  return parentDayStatus(t, day);
+}
+// Clickable parent cells (default = roll-up, but you can override any day).
+function cellsParentHTML(t) {
+  const at = DAYS.map((d) => parentCellStatus(t, d));
   return DAYS.map((d, i) => {
     const st = at[i]; const on = st != null;
     const prev = i > 0 && at[i - 1] != null, next = i < DAYS.length - 1 && at[i + 1] != null;
-    const cls = ['g-cell', 'rollup', d.isWeekend ? 'wknd' : '', d.isToday ? 'today' : '', on ? 'on' : '', on && !prev ? 'st' : '', on && !next ? 'en' : ''].filter(Boolean).join(' ');
-    return `<div class="${cls}" ${on ? `style="--c:${byKey[st].color}"` : ''}>${on ? `<span class="cc">${st}</span>` : ''}</div>`;
+    const cls = ['g-cell', d.isWeekend ? 'wknd' : '', d.isToday ? 'today' : '', on ? 'on' : '', on && !prev ? 'st' : '', on && !next ? 'en' : ''].filter(Boolean).join(' ');
+    return `<div class="${cls}" data-cell="${t.id}" data-iso="${d.iso}" ${on ? `style="--c:${byKey[st].color}"` : ''}>${on ? `<span class="cc">${st}</span>` : ''}</div>`;
   }).join('');
 }
 
 function taskRowHTML(t) {
   const hasSub = t.subtasks && t.subtasks.length;
-  const kind = schedKind(t); const cur = hasSub ? parentStatus(t) : (t.status || 'NS'); const done = !!byKey[cur]?.done;
+  const kind = schedKind(t); const cur = effStatus(t); const done = !!byKey[cur]?.done;
   const owners = (t.owners || []).map((o) => `<span class="owner"><b>${esc(o.role)}</b> ${esc(o.who)}</span>`).join('');
   const laterTag = kind === 'future' ? `<span class="tag future">→ ${MONTHS[+t.schedule.start.slice(5, 7) - 1]} ${t.schedule.start.slice(0, 4)}</span>` : kind === 'conditional' ? `<span class="tag cond">as needed</span>` : '';
   const isExp = expanded.has(t.id);
+  const manual = hasManualStatus(t);
   const statusCtl = hasSub
-    ? `<span class="status-chip" style="--st:${byKey[cur].color}" title="rolled up from ${t.subtasks.length} sub-tasks">${cur === 'NS' ? '—' : cur} · ${byKey[cur].label}</span>`
+    ? `<select class="status-select ${manual ? '' : 'auto'}" data-status="${t.id}" style="--st:${byKey[cur].color}" title="Auto rolls up from ${t.subtasks.length} sub-tasks; pick a status to override">
+            <option value="AUTO" ${manual ? '' : 'selected'}>⟳ Auto · ${cur === 'NS' ? '—' : cur}</option>
+            ${STATUSES.filter((o) => o.key !== 'NS').map((o) => `<option value="${o.key}" ${manual && o.key === t.status ? 'selected' : ''}>${o.key} · ${o.label}</option>`).join('')}
+          </select>`
     : `<select class="status-select" data-status="${t.id}" style="--st:${byKey[cur].color}">
             ${STATUSES.map((o) => `<option value="${o.key}" ${o.key === cur ? 'selected' : ''}>${o.key === 'NS' ? '— Not started' : `${o.key} · ${o.label}`}</option>`).join('')}
           </select>`;
@@ -272,7 +286,7 @@ function taskRowHTML(t) {
           <svg class="tw" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M9 6l6 6-6 6"/></svg>
           <span>${esc(t.title)}</span>${hasSub ? `<span class="subcount">${t.subtasks.length}</span>` : ''}${laterTag}</button>
         <div class="g-owner-row">${statusCtl}${owners ? `<div class="owner-tags">${owners}</div>` : ''}</div>
-      </div>${hasSub ? cellsRollupHTML(t) : cellsHTML(t, t)}
+      </div>${hasSub ? cellsParentHTML(t) : cellsHTML(t, t)}
     </div>`;
   if (isExp) {
     if (editing) {
@@ -373,7 +387,7 @@ function taskEditHTML(t) {
 
 function msProgress(m) {
   let total = 0, done = 0;
-  for (const t of m.tasks) { const arr = (t.subtasks && t.subtasks.length) ? t.subtasks : [t]; for (const n of arr) { total++; if (byKey[n.status || 'NS']?.done) done++; } }
+  for (const t of m.tasks) for (const n of taskUnits(t)) { total++; if (byKey[n.status || 'NS']?.done) done++; }
   return { done, total, pct: total ? Math.round((done / total) * 100) : 0 };
 }
 
@@ -509,7 +523,7 @@ function wireBoard() {
     if (n.classList.contains('ef-orole')) { const f = findTask(n.dataset.oid); const o = f.t.owners[+n.dataset.oidx]; if (o) { o.role = n.value; commit(); rebuildBoard(); } return; }
     if (n.classList.contains('ef-sgroup')) { const t = findTask(n.dataset.stid).t; const s = t.subtasks[+n.dataset.sidx]; if (s) { s.group = n.value.trim(); commit(); rebuildBoard(); } return; }
     if (n.dataset.substatus) { const f = findAny(n.dataset.substatus); if (f) { f.node.status = n.value; commit(); refreshAll(); toast(`Status → ${byKey[n.value].label}`); } return; }
-    if (n.dataset.status) { findTask(n.dataset.status).t.status = n.value; commit(); refreshAll(); toast(`Status → ${byKey[n.value].label}`); return; }
+    if (n.dataset.status) { findTask(n.dataset.status).t.status = n.value; commit(); refreshAll(); toast(`Status → ${n.value === 'AUTO' ? 'Auto (roll-up)' : byKey[n.value].label}`); return; }
     if (n.dataset.note !== undefined && n.classList.contains('note-input')) { findTask(n.dataset.note).t.note = n.value.trim(); commit(); toast('Note saved'); return; }
     if (n.classList.contains('ef-gname')) { const t = findTask(n.dataset.gid).t; const old = n.dataset.gkey, val = n.value.trim() || 'group'; if (val !== old) { const items = t.detail[old]; delete t.detail[old]; t.detail[val] = items; commit(); rebuildBoard(); } return; }
     if (n.dataset.f === 'start' || n.dataset.f === 'end') { setSchedule(n.dataset.id, (s) => { s[n.dataset.f] = n.value || undefined; }); rebuildBoard(); return; }
