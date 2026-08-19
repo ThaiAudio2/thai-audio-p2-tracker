@@ -518,11 +518,30 @@ body.editing .g-row .g-title { cursor: default; }
 .g-cell.today { box-shadow: inset 2px 0 0 color-mix(in srgb, var(--brand) 55%, transparent); }
 .g-cell:hover { background: color-mix(in srgb, var(--brand) 14%, transparent); }
 .g-cell.on::after {
-  content: ''; position: absolute; inset: 7px 0; background: var(--c); opacity: .95;
+  content: ''; position: absolute; inset: 6px 0; background: var(--c); opacity: .95;
 }
 .g-cell.on.st::after { left: 3px; border-top-left-radius: 6px; border-bottom-left-radius: 6px; }
 .g-cell.on.en::after { right: 3px; border-top-right-radius: 6px; border-bottom-right-radius: 6px; }
 .g-cell.on:hover::after { opacity: 1; }
+.g-cell .cc { position: relative; z-index: 1; display: grid; place-items: center; height: 100%; font-size: .56rem; font-weight: 800; color: #fff; letter-spacing: .02em; pointer-events: none; text-shadow: 0 1px 1px rgba(0,0,0,.25); }
+
+/* day status picker */
+.daymenu {
+  position: fixed; z-index: 80; width: 236px; max-height: 340px; overflow: auto;
+  background: var(--surface); border: 1px solid var(--border-2); border-radius: 12px;
+  box-shadow: var(--shadow-lg); padding: 8px;
+}
+.dm-h { display: flex; flex-direction: column; gap: 1px; padding: 4px 6px 8px; border-bottom: 1px solid var(--border); margin-bottom: 6px; }
+.dm-h b { font-size: .82rem; }
+.dm-h span { font-size: .72rem; color: var(--text-mut); }
+.dm-grid { display: flex; flex-direction: column; gap: 2px; }
+.dm-b { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; background: none; border: 0; border-radius: 8px; padding: 6px 8px; font: inherit; font-size: .8rem; color: var(--text); cursor: pointer; }
+.dm-b:hover { background: var(--surface-2); }
+.dm-b.sel { background: color-mix(in srgb, var(--brand) 14%, transparent); font-weight: 650; }
+.dm-b .sw { width: 12px; height: 12px; border-radius: 4px; flex: 0 0 auto; }
+.dm-b b { font-weight: 800; }
+.dm-clear { width: 100%; margin-top: 6px; padding: 7px; border: 1px solid var(--border); background: var(--surface); color: var(--text-mut); border-radius: 8px; font: inherit; font-size: .78rem; font-weight: 600; cursor: pointer; }
+.dm-clear:hover { border-color: #ef4444; color: #ef4444; }
 
 /* detail row */
 .g-detail { position: sticky; left: 0; z-index: 1; background: var(--surface-2); border-bottom: 1px solid var(--border); }

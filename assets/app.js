@@ -153,7 +153,15 @@ function renderFilters() {
 /* ---------------- schedule / painting ---------------- */
 function schedKind(t) { const s = t.schedule; if (!s) return 'none'; if (s.conditional) return 'conditional'; if (s.start && s.start > GRID_END) return 'future'; return 'grid'; }
 function defaultActive(t, day) { const s = t.schedule; if (!s || s.conditional) return false; if (s.start && day.iso < s.start) return false; if (s.end && day.iso > s.end) return false; if (s.weekdays && !s.weekdays.includes(day.dow)) return false; return true; }
-function isPainted(t, day) { const o = t.days?.[day.iso]; if (o !== undefined) return !!o; return defaultActive(t, day); }
+// Per-day status: an override in t.days[iso] wins (0 = explicitly cleared,
+// a status key = that status; legacy 1 = working day). Otherwise a scheduled
+// day defaults to the task's overall status (or WD before one is set).
+function dayStatusOf(t, day) {
+  const o = t.days ? t.days[day.iso] : undefined;
+  if (o !== undefined) { if (o === 0 || o === '0' || o === false) return null; if (o === 1 || o === true) return 'WD'; return byKey[o] ? o : null; }
+  if (!defaultActive(t, day)) return null;
+  return t.status && t.status !== 'NS' ? t.status : 'WD';
+}
 
 /* ---------------- board render ---------------- */
 let editing = false;
@@ -163,19 +171,20 @@ const expanded = new Set();
 function headerHTML() {
   const weeks = WEEK_GROUPS.map((w) => `<div class="g-week" style="flex-basis:${w.days.length * 34}px"><span class="wk">${esc(w.label)}</span><span class="rg">${esc(w.range)}</span></div>`).join('');
   const days = DAYS.map((d) => `<div class="g-day ${d.isWeekend ? 'wknd' : ''} ${d.isToday ? 'today' : ''} ${d.isMonthStart ? 'mstart' : ''}"><span class="mo">${d.dayNum === 1 || d === DAYS[0] ? MONTHS[d.month] : ''}</span><span class="dn">${d.dayNum}</span><span class="dw">${WD[d.dow]}</span></div>`).join('');
-  return `<div class="g-header"><div class="g-corner"><span>Task</span><span class="hint">${editing ? 'edit mode — click fields to change' : 'click a day cell to paint it'}</span></div>
+  return `<div class="g-header"><div class="g-corner"><span>Task</span><span class="hint">${editing ? 'edit mode — click fields to change' : 'click a day cell to set its status'}</span></div>
       <div class="g-headcols"><div class="g-weeks">${weeks}</div><div class="g-days">${days}</div></div></div>`;
 }
 
 function cellsHTML(t) {
   let out = '';
   DAYS.forEach((d, i) => {
-    const on = isPainted(t, d);
-    const prev = i > 0 && isPainted(t, DAYS[i - 1]);
-    const next = i < DAYS.length - 1 && isPainted(t, DAYS[i + 1]);
-    const color = (t.status || 'NS') === 'NS' ? 'var(--plan)' : statusColor(t);
+    const st = dayStatusOf(t, d);
+    const on = st != null;
+    const prev = i > 0 && dayStatusOf(t, DAYS[i - 1]) != null;
+    const next = i < DAYS.length - 1 && dayStatusOf(t, DAYS[i + 1]) != null;
+    const color = on ? byKey[st].color : '';
     const cls = ['g-cell', d.isWeekend ? 'wknd' : '', d.isToday ? 'today' : '', on ? 'on' : '', on && !prev ? 'st' : '', on && !next ? 'en' : ''].filter(Boolean).join(' ');
-    out += `<div class="${cls}" data-cell="${t.id}" data-iso="${d.iso}" ${on ? `style="--c:${color}"` : ''}></div>`;
+    out += `<div class="${cls}" data-cell="${t.id}" data-iso="${d.iso}" ${on ? `style="--c:${color}"` : ''}>${on ? `<span class="cc">${st}</span>` : ''}</div>`;
   });
   return out;
 }
@@ -228,9 +237,9 @@ function taskEditHTML(t) {
       <div><label class="ef-l">คำอธิบาย (ไทย)</label><textarea class="ef-ta" data-f="desc.th" data-id="${t.id}" rows="2">${esc(t.desc?.th)}</textarea></div>
       <div><label class="ef-l">Description (EN)</label><textarea class="ef-ta" data-f="desc.en" data-id="${t.id}" rows="2">${esc(t.desc?.en)}</textarea></div>
     </div>
-    <label class="ef-l">Owners / roles</label>
+    <label class="ef-l">Owners (role + name)</label>
     <div class="ef-owners">${owners}</div>
-    <button class="ef-add" data-oadd="${t.id}">+ Add role</button>
+    <button class="ef-add" data-oadd="${t.id}">+ Add owner</button>
     <label class="ef-l">Schedule (Gantt bar)</label>
     <div class="ef-sched">
       <label class="ef-condl"><input type="checkbox" class="ef-cb" data-f="conditional" data-id="${t.id}" ${s.conditional ? 'checked' : ''}> as needed (no dates)</label>
@@ -307,6 +316,37 @@ function setMsField(id, path, val) { const f = findMs(id); if (!f) return; if (p
 function setSchedule(id, mut) { const f = findTask(id); if (!f) return; f.t.schedule = f.t.schedule || {}; mut(f.t.schedule); if (!f.t.schedule.start && !f.t.schedule.end && !f.t.schedule.conditional && !(f.t.schedule.weekdays || []).length) f.t.schedule = null; commit(); }
 function move(arr, i, dir) { const j = i + dir; if (j < 0 || j >= arr.length) return false; [arr[i], arr[j]] = [arr[j], arr[i]]; return true; }
 
+/* ---------------- day status picker ---------------- */
+let dayMenu = null;
+function closeDayMenu() { if (dayMenu) { dayMenu.remove(); dayMenu = null; document.removeEventListener('click', outsideDayMenu, true); document.removeEventListener('keydown', escDayMenu); } }
+function outsideDayMenu(e) { if (dayMenu && !dayMenu.contains(e.target)) closeDayMenu(); }
+function escDayMenu(e) { if (e.key === 'Escape') closeDayMenu(); }
+function openDayMenu(cell, id, iso) {
+  closeDayMenu();
+  const f = findTask(id); if (!f) return;
+  const day = DAYS.find((d) => d.iso === iso);
+  const cur = dayStatusOf(f.t, day);
+  const d = new Date(iso + 'T00:00:00');
+  dayMenu = el('div', 'daymenu');
+  dayMenu.innerHTML = `<div class="dm-h"><b>${esc(f.t.title).slice(0, 34)}</b><span>${MONTHS[d.getMonth()]} ${d.getDate()} · ${['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][d.getDay()]}</span></div>
+    <div class="dm-grid">${STATUSES.filter((s) => s.key !== 'NS').map((s) => `<button class="dm-b ${cur === s.key ? 'sel' : ''}" data-set="${s.key}"><span class="sw" style="background:${s.color}"></span><b>${s.key}</b> ${s.label}</button>`).join('')}</div>
+    <button class="dm-clear" data-set="__clear">✕ Clear this day</button>`;
+  document.body.appendChild(dayMenu);
+  const r = cell.getBoundingClientRect();
+  const w = dayMenu.offsetWidth || 240, h = dayMenu.offsetHeight || 300;
+  let left = Math.min(Math.max(8, r.left), window.innerWidth - w - 8);
+  let top = r.bottom + 6; if (top + h > window.innerHeight - 8) top = Math.max(8, r.top - h - 6);
+  dayMenu.style.left = left + 'px'; dayMenu.style.top = top + 'px';
+  dayMenu.addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-set]'); if (!btn) return;
+    const v = btn.dataset.set;
+    f.t.days = f.t.days || {};
+    if (v === '__clear') f.t.days[iso] = 0; else f.t.days[iso] = v;
+    commit(); rebuildBoard(); closeDayMenu();
+  });
+  setTimeout(() => { document.addEventListener('click', outsideDayMenu, true); document.addEventListener('keydown', escDayMenu); }, 0);
+}
+
 /* ---------------- interactions ---------------- */
 function wireBoard() {
   const wrap = $('#gantt-wrap');
@@ -314,7 +354,7 @@ function wireBoard() {
   wrap.addEventListener('click', (e) => {
     const b = (a) => e.target.closest(`[${a}]`);
     let n;
-    if ((n = e.target.closest('.g-cell')) && !editing) { const id = n.dataset.cell, iso = n.dataset.iso; const f = findTask(id); const day = DAYS.find((d) => d.iso === iso); f.t.days[iso] = isPainted(f.t, day) ? 0 : 1; commit(); rebuildBoard(); return; }
+    if ((n = e.target.closest('.g-cell'))) { openDayMenu(n, n.dataset.cell, n.dataset.iso); return; }
     if ((n = b('data-toggle'))) { const id = n.dataset.toggle; expanded.has(id) ? expanded.delete(id) : expanded.add(id); rebuildBoard(); return; }
     if ((n = b('data-mstoggle'))) { const id = n.dataset.mstoggle; collapsed.has(id) ? collapsed.delete(id) : collapsed.add(id); rebuildBoard(); return; }
     // edit ops
@@ -372,7 +412,7 @@ function renderGuide() {
         <p class="en">Thai audio-collection project, Phase 2, delivering <b>500 QC-passed pairs</b> across ${BOARD.length} milestones — from acquisition launch → pilots → stable weekly delivery → scale → QC and closure. This page explains what each stage is and why it matters.</p></div>
       <div class="guide-how"><h3>วิธีใช้ตาราง / How to use the tracker</h3><ul>
         <li><span class="th">แต่ละงานตั้ง <b>สถานะ</b>ได้จากเมนูดรอปดาวน์ (สีของแถบจะเปลี่ยนตามสถานะ)</span><span class="en">Set each task's <b>status</b> from its dropdown — the bar takes the status colour.</span></li>
-        <li><span class="th"><b>คลิกช่องวัน</b>ในตารางเพื่อระบาย/ลบวันที่ทำงานเอง</span><span class="en"><b>Click a day cell</b> to paint/unpaint working days.</span></li>
+        <li><span class="th"><b>คลิกช่องวัน</b>ในตารางเพื่อเลือกว่าวันนั้นเป็นสถานะไหน (WD, IP, TC, DL…) — โค้ดจะโชว์ในช่อง</span><span class="en"><b>Click a day cell</b> to set that day's status (WD, IP, TC, DL…) — the code shows in the cell.</span></li>
         <li><span class="th">กด <b>✏️ Edit</b> เพื่อเพิ่ม/ลบ/แก้ milestone และงาน เจ้าของ วันที่ และคำอธิบาย</span><span class="en">Hit <b>✏️ Edit</b> to add/remove/change milestones, tasks, owners, dates and descriptions.</span></li>
         <li><span class="th">ข้อมูล<b>ซิงก์อัตโนมัติ</b>ทุกคนเมื่อเชื่อม Firebase (ดูสถานะมุมขวาบน)</span><span class="en">Data <b>syncs across everyone</b> when Firebase is connected.</span></li>
       </ul><div class="guide-legend"><div class="gl-title">Status codes</div>${statusRows}</div></div>
