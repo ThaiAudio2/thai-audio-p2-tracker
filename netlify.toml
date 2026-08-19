@@ -1,0 +1,28 @@
+# ---------------------------------------------------------------------------
+# Netlify configuration — Thai Audio P2 · Milestone & Tracker
+#
+# This is a plain static site (HTML + CSS + vanilla JS modules). There is no
+# build step: Netlify serves the repository root as-is. When you connect the
+# repo in the Netlify dashboard, these settings are picked up automatically —
+# leave the "Build command" blank and "Publish directory" as "." (or "/").
+# ---------------------------------------------------------------------------
+
+[build]
+  publish = "."
+  # No build command — nothing to compile.
+  command = ""
+
+# Sensible security headers for every response.
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Frame-Options = "SAMEORIGIN"
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy = "strict-origin-when-cross-origin"
+
+# The asset filenames are stable (data.js / app.js / styles.css), so revalidate
+# on each load — this way edits to the plan show up without a hard refresh.
+[[headers]]
+  for = "/assets/*"
+  [headers.values]
+    Cache-Control = "public, max-age=600, must-revalidate"
