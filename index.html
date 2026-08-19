@@ -23,6 +23,7 @@
         </div>
       </div>
       <div class="top-spacer"></div>
+      <span class="sync local" id="sync" title="Sync status"><span class="sdot">◍</span>Saved locally</span>
       <div class="updated" id="updated"></div>
       <button class="icon-btn" id="theme" title="Toggle theme" aria-label="Toggle theme">☾</button>
     </div>
@@ -52,10 +53,6 @@
       <div class="dist" id="dist"></div>
     </section>
 
-    <!-- Timeline -->
-    <div class="section-title">Near-term timeline</div>
-    <div class="weeks" id="weeks"></div>
-
     <!-- Toolbar -->
     <div class="toolbar">
       <div class="search">
@@ -75,15 +72,36 @@
     <!-- Legend -->
     <div class="legend" id="legend"></div>
 
-    <!-- Board -->
+    <!-- Board (Gantt) -->
+    <div class="section-title">Milestone timeline · scroll → for later weeks</div>
     <section id="board"></section>
     <div class="empty" id="empty" style="display:none">No tasks match your filters.</div>
   </main>
 
   <footer>
-    <div class="save-note"><span class="d"></span> Progress is saved automatically in this browser. Use Export to back it up or share.</div>
+    <div class="save-note"><span class="d"></span> Progress saves automatically. Connect Firebase (below) to sync live across everyone.</div>
     <div style="margin-top:6px">Thai Audio P2 · Milestone &amp; Tracker</div>
   </footer>
+
+  <!-- ────────────────────────────────────────────────────────────────
+       🔧 OPTIONAL — Live multi-person sync via Firebase.
+       Leave blank to keep saving only in this browser.
+       To sync everyone: create a Firebase project → enable Firestore →
+       Project settings → Your apps → Web app → copy the config here.
+       (These web-config values are NOT secret; access is controlled by
+       Firestore Security Rules — see README.)
+       ──────────────────────────────────────────────────────────────── -->
+  <script>
+    window.TRACKER_BOARD_ID = "thai-audio-p2";
+    window.FIREBASE_CONFIG = {
+      // apiKey: "…",
+      // authDomain: "your-project.firebaseapp.com",
+      // projectId: "your-project",
+      // storageBucket: "your-project.appspot.com",
+      // messagingSenderId: "…",
+      // appId: "…"
+    };
+  </script>
 
   <script type="module" src="assets/app.js"></script>
 </body>

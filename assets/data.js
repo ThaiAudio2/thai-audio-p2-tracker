@@ -34,6 +34,67 @@ export const STATUSES = [
   { key: 'DL', label: 'Delayed',             color: '#e11d48' },
 ];
 
+// The continuous day grid, like the sheet's calendar columns.
+// 7 weeks of daily columns starting Mon 17 Aug 2026 → Sun 04 Oct 2026.
+export const GRID = { start: '2026-08-17', weeks: 7, today: '2026-08-19' };
+
+/**
+ * When each task is scheduled on the day grid (its Gantt bar).
+ *   { start, end }             — a continuous band of days (inclusive, ISO).
+ *   { start, end, weekdays }   — only those weekdays inside the band
+ *                                 (0 = Sun … 6 = Sat), for recurring cadences.
+ *   { conditional: true }      — no fixed dates; an "as needed" playbook.
+ * Tasks whose band starts after the grid ends are shown as a later phase.
+ * These are sensible defaults — every cell is click-editable in the board.
+ */
+export const SCHEDULE = {
+  'm0-setup':    { start: '2026-08-17', end: '2026-08-21' },
+
+  'm1-engine1':  { start: '2026-08-24', end: '2026-08-31' },
+  'm1-checkin':  { start: '2026-08-24', end: '2026-08-31' },
+  'm1-engine2':  { start: '2026-08-24', end: '2026-09-06' },
+  'm1-tier1':    { start: '2026-08-24', end: '2026-09-06' },
+  'm1-tier2':    { start: '2026-08-31', end: '2026-09-06' },
+  'm1-tier3':    { start: '2026-08-31', end: '2026-09-06' },
+  'm1-tier4':    { start: '2026-09-01', end: '2026-09-06' },
+  'm1-tier5':    { start: '2026-09-01', end: '2026-09-06' },
+  'm1-tier6':    { start: '2026-09-01', end: '2026-09-06' },
+
+  'm2-cohort':   { start: '2026-09-01', end: '2026-09-06' },
+  'm2-day1':     { start: '2026-09-01', end: '2026-09-01' },
+  'm2-day2':     { start: '2026-09-02', end: '2026-09-02' },
+  'm2-day3':     { start: '2026-09-03', end: '2026-09-03' },
+
+  'm3-pilot':    { start: '2026-09-07', end: '2026-09-13' },
+
+  'm4-target':   { start: '2026-09-14', end: '2026-10-04' },
+  'm4-mon':      { start: '2026-09-14', end: '2026-10-04', weekdays: [1] },
+  'm4-tuewed':   { start: '2026-09-14', end: '2026-10-04', weekdays: [2, 3] },
+  'm4-thu':      { start: '2026-09-14', end: '2026-10-04', weekdays: [4] },
+  'm4-fri':      { start: '2026-09-14', end: '2026-10-04', weekdays: [5] },
+
+  'm5-review':   { start: '2026-09-14', end: '2026-09-18' },
+  'm5-decision': { start: '2026-09-18', end: '2026-09-20' },
+
+  // Beyond the near-term grid — shown as later phases.
+  'm6-m2':       { start: '2026-10-05', end: '2026-11-01' },
+  'm6-m3':       { start: '2026-11-02', end: '2026-11-29' },
+  'm6-m4':       { start: '2026-11-30', end: '2026-12-27' },
+
+  'm7-green':    { conditional: true },
+  'm7-amber':    { conditional: true },
+  'm7-red':      { conditional: true },
+  'm7-critical': { conditional: true },
+
+  'm8-final':          { start: '2026-12-28', end: '2027-01-24' },
+  'm9-confirm':        { start: '2027-01-25', end: '2027-01-31' },
+  'm10-obligations':   { start: '2027-02-01', end: '2027-02-07' },
+  'm10-reconcile':     { start: '2027-02-01', end: '2027-02-07' },
+  'm11-review':        { start: '2027-02-08', end: '2027-02-14' },
+  'm11-relationships': { start: '2027-02-08', end: '2027-02-14' },
+  'm11-deliverables':  { start: '2027-02-15', end: '2027-02-21' },
+};
+
 // Near-term weekly calendar strip (row 12–15 of the sheet).
 export const WEEKS = [
   { id: 'wk0', label: 'WK 0', range: 'Aug 17 – Aug 23', start: '2026-08-17' },

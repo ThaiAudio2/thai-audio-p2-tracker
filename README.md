@@ -7,24 +7,74 @@ An interactive milestone tracker for the **Thai Audio Phase 2** project — a **
 delivery target across 11 milestones. Built as a plain static site (HTML + CSS + vanilla JS), so it
 deploys anywhere with no build step and runs entirely in the browser.
 
-> **Live data note:** progress (each task's status + notes) is saved in your browser via
-> `localStorage`. It's private to that browser/device. Use **Export** to back it up or hand the
-> JSON to a teammate, and **Import** to load it back.
+> **Where progress is saved:** by default each task's status, notes, and painted days are saved
+> in your browser via `localStorage` (private to that device). **Connect Firebase** (below) to sync
+> the whole board **live across everyone**. You can also **Export/Import** the state as JSON.
 
 ---
 
 ## ✨ Features
 
+- **Spreadsheet-style Gantt board** — a continuous daily date axis (like the source sheet), 7 weeks
+  from Mon 17 Aug → Sun 04 Oct 2026, with the current day highlighted and weekends shaded.
+- **Schedule bars you can paint** — every task has a colored bar for its scheduled days; **click any
+  day cell to paint / unpaint it**, just like marking cells in the spreadsheet.
 - **Goal dashboard** — overall completion ring, KPI cards, and a status-distribution bar.
 - **11 milestones** transcribed from the source spreadsheet, each with its tasks, owners
-  (POC / Management / Ops / TA), checklists, and remarks.
-- **Per-task status** — pick from the project's status codes (`IP`, `PI`, `WQ`, `ES`, `TC`, `DL`, …).
-- **Per-task notes** — jot a quick update on any task.
-- **Near-term weekly timeline** (WK 0 → W6, Aug 17 → Oct 04 2026) with the current week highlighted.
-- **Search & filter** by text, status, or owner.
-- **Export / Import / Reset** progress as JSON.
-- **Light / dark theme** with a one-click toggle.
-- **Zero backend, zero build** — just static files.
+  (POC / Management / Ops / TA), checklists, and remarks (click a task title to expand).
+- **Per-task status** — pick from the project's status codes (`IP`, `PI`, `WQ`, `ES`, `TC`, `DL`, …);
+  the bar takes the status color.
+- **Per-task notes**, **search & filter** (text / status / owner), **Export / Import / Reset**.
+- **Live multi-person sync** via Firebase Firestore (optional — see below).
+- **Light / dark theme**, **zero build** — just static files.
+
+---
+
+## 👥 Sync across people (Firebase — optional)
+
+Out of the box the board saves locally. To make everyone see the same board in real time:
+
+1. Go to **https://console.firebase.google.com** → **Add project** (any name).
+2. In the project, open **Build → Firestore Database → Create database** → **Start in production mode**.
+3. Add a **Web app**: Project Overview → the `</>` icon → register the app → copy the
+   **`firebaseConfig`** object it shows you.
+4. Paste those values into the config block near the bottom of **`index.html`** (or of the single
+   `thai-audio-p2-tracker.html` file), e.g.:
+
+   ```html
+   <script>
+     window.TRACKER_BOARD_ID = "thai-audio-p2";
+     window.FIREBASE_CONFIG = {
+       apiKey: "AIza…",
+       authDomain: "your-project.firebaseapp.com",
+       projectId: "your-project",
+       storageBucket: "your-project.appspot.com",
+       messagingSenderId: "1234567890",
+       appId: "1:1234567890:web:abc123"
+     };
+   </script>
+   ```
+
+5. Set **Firestore → Rules** so the board doc is shared (open read/write for simplicity — anyone
+   with the link can edit; tighten later with Firebase Auth if needed):
+
+   ```
+   rules_version = '2';
+   service cloud.firestore {
+     match /databases/{database}/documents {
+       match /trackers/{board} {
+         allow read, write: if true;
+       }
+     }
+   }
+   ```
+
+6. Redeploy (drag the file onto Netlify Drop again, or push if you connected Git).
+   The badge in the header turns **● Live · synced** and every change is shared instantly.
+
+> The Firebase **web config is not a secret** (it's shipped to every browser); access is governed by
+> the Firestore **Security Rules** above, not by hiding the config. All state lives in one document:
+> `trackers/thai-audio-p2`.
 
 ---
 
@@ -86,22 +136,32 @@ npx serve .
 
 All content lives in **`assets/data.js`**:
 
-- `PROJECT` — title, "updated on" date, goal, current week.
+- `PROJECT` — title, "updated on" date, goal.
 - `STATUSES` — the status codes and their colors.
-- `WEEKS` — the near-term timeline strip.
+- `GRID` — the day axis (start date, number of weeks, "today").
+- `WEEKS` — the week labels shown across the top of the Gantt.
+- `SCHEDULE` — each task's default bar: `{ start, end }`, `{ start, end, weekdays }`, or
+  `{ conditional: true }`. Dates are ISO (`2026-08-24`); `weekdays` are `0`=Sun … `6`=Sat.
 - `MILESTONES` — the milestones and their tasks (title, `owners`, `lines`, `detail`, `remarks`).
 
 Each task needs a **stable `id`**. The tracker keys saved progress on that `id`, so renaming an
-existing `id` detaches its saved status/notes — add new ids freely, but don't renumber old ones.
+existing `id` detaches its saved status/notes/painted days — add new ids freely, but don't renumber
+old ones.
+
+> After editing `assets/*`, rebuild the single drag-and-drop file with:
+> `node scripts/build-standalone.mjs`
 
 ## 📁 Structure
 
 ```
-index.html          # app shell
+index.html          # app shell + Firebase config slot
 assets/
-  data.js           # the plan (milestones, tasks, statuses, weeks) — edit here
-  app.js            # rendering + interactivity + localStorage
+  data.js           # the plan (milestones, tasks, schedule, statuses) — edit here
+  app.js            # Gantt rendering, interactivity, localStorage + Firebase sync
   styles.css        # theme-aware styling
   favicon.svg
+scripts/
+  build-standalone.mjs   # bundles everything into thai-audio-p2-tracker.html
+thai-audio-p2-tracker.html  # single self-contained file for Netlify Drop
 netlify.toml        # Netlify deploy config (no build step)
 ```
