@@ -549,10 +549,11 @@ body.editing .g-row .g-title { cursor: default; }
 .subcount { display: inline-grid; place-items: center; min-width: 17px; height: 17px; padding: 0 4px; margin-left: 5px; border-radius: 999px; background: color-mix(in srgb, var(--brand) 16%, transparent); color: var(--brand); font-size: .62rem; font-weight: 800; }
 .status-chip { display: inline-block; padding: 4px 8px; border-radius: 7px; font-size: .7rem; font-weight: 700; color: #fff; background: var(--st, var(--text-mut)); }
 
-.g-row.sub .g-info.sub-info { flex-direction: row; align-items: center; gap: 8px; padding: 5px 10px 5px 22px; background: var(--surface); }
-.g-row.sub .sub-dot { flex: 0 0 auto; width: 5px; height: 5px; border-radius: 50%; background: var(--border-2); }
-.g-row.sub .sub-main { display: flex; align-items: center; gap: 8px; min-width: 0; flex: 1; }
-.g-row.sub .sub-title { font-size: .8rem; color: var(--text-soft); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+.g-row.sub .g-info.sub-info { flex-direction: row; align-items: flex-start; gap: 8px; padding: 6px 10px 6px 22px; background: var(--surface); }
+.g-row.sub .sub-dot { flex: 0 0 auto; width: 5px; height: 5px; border-radius: 50%; background: var(--border-2); margin-top: 6px; }
+.g-row.sub .sub-main { display: flex; align-items: flex-start; gap: 8px; min-width: 0; flex: 1; }
+.g-row.sub .sub-title { font-size: .8rem; color: var(--text-soft); white-space: normal; overflow-wrap: anywhere; line-height: 1.3; flex: 1; padding-top: 2px; }
+.status-select.mini { margin-top: 1px; }
 .g-row.sub.done .sub-title { color: var(--text-mut); text-decoration: line-through; }
 .status-select.mini { max-width: 60px; padding: 3px 5px; font-size: .66rem; flex: 0 0 auto; }
 .g-row.subgroup { border-bottom: 0; }
