@@ -30,6 +30,13 @@
   </header>
 
   <main class="wrap">
+    <!-- Tabs -->
+    <div class="tabs">
+      <button class="tab active" data-view="tracker">📋 Tracker · ตาราง</button>
+      <button class="tab" data-view="guide">📖 Guide · คู่มือ</button>
+    </div>
+
+    <div id="view-tracker">
     <!-- Hero / goal -->
     <section class="hero">
       <div class="goal-banner">
@@ -76,6 +83,9 @@
     <div class="section-title">Milestone timeline · scroll → for later weeks</div>
     <section id="board"></section>
     <div class="empty" id="empty" style="display:none">No tasks match your filters.</div>
+    </div><!-- /view-tracker -->
+
+    <div id="view-guide" hidden></div>
   </main>
 
   <footer>

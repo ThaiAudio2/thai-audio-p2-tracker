@@ -307,6 +307,61 @@ footer .save-note { display: inline-flex; align-items: center; gap: 6px; }
 }
 .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
 
+/* ================= Tabs ================= */
+.tabs { display: flex; gap: 6px; margin: 22px 0 4px; border-bottom: 1px solid var(--border); }
+.tab {
+  background: none; border: 0; border-bottom: 2px solid transparent; margin-bottom: -1px;
+  padding: 10px 16px; font: inherit; font-weight: 650; font-size: .9rem; color: var(--text-mut);
+  cursor: pointer; transition: .15s;
+}
+.tab:hover { color: var(--text); }
+.tab.active { color: var(--brand); border-bottom-color: var(--brand); }
+
+/* ================= Bilingual description ================= */
+.desc-block {
+  background: color-mix(in srgb, var(--brand) 7%, transparent); border-left: 3px solid var(--brand);
+  border-radius: 0 10px 10px 0; padding: 8px 12px; margin-bottom: 10px;
+}
+.desc-block .th { margin: 0; font-size: .84rem; color: var(--text); font-weight: 550; }
+.desc-block .en { margin: 3px 0 0; font-size: .8rem; color: var(--text-soft); font-style: italic; }
+
+/* ================= Guide page ================= */
+.guide { max-width: 860px; margin: 8px auto 0; }
+.guide-intro { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 20px 22px; box-shadow: var(--shadow); }
+.guide-intro h2 { margin: 0 0 10px; font-size: 1.3rem; letter-spacing: -.01em; }
+.guide-intro .th { margin: 0 0 8px; font-size: .92rem; line-height: 1.6; }
+.guide-intro .en { margin: 0; font-size: .86rem; color: var(--text-soft); font-style: italic; line-height: 1.55; }
+.guide-intro b { color: var(--brand); }
+
+.guide-how { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 18px 22px; box-shadow: var(--shadow); margin-top: 16px; }
+.guide-how h3 { margin: 0 0 12px; font-size: 1rem; }
+.guide-how > ul { margin: 0; padding-left: 18px; }
+.guide-how > ul > li { margin: 8px 0; }
+.guide-how .th { display: block; font-size: .88rem; }
+.guide-how .en { display: block; font-size: .8rem; color: var(--text-mut); font-style: italic; margin-top: 1px; }
+.guide-how b { color: var(--brand); }
+.guide-legend { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--border); }
+.gl-title { font-size: .72rem; text-transform: uppercase; letter-spacing: .08em; color: var(--text-mut); font-weight: 700; margin-bottom: 8px; }
+.gl-row { display: inline-flex; align-items: center; gap: 7px; width: 48%; margin: 3px 0; font-size: .82rem; color: var(--text-soft); }
+.gl-code { display: inline-grid; place-items: center; width: 26px; height: 20px; border-radius: 5px; color: #fff; font-size: .68rem; font-weight: 800; flex: 0 0 auto; }
+
+.guide-h { font-size: .8rem; text-transform: uppercase; letter-spacing: .1em; color: var(--text-mut); font-weight: 700; margin: 26px 0 12px; }
+.guide-ms { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px 20px; box-shadow: var(--shadow); margin-bottom: 12px; }
+.guide-ms-head { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; }
+.guide-ms-head .mno { flex: 0 0 auto; width: 30px; height: 30px; border-radius: 9px; display: grid; place-items: center; font-weight: 800; background: color-mix(in srgb, var(--brand) 15%, transparent); color: var(--brand); border: 1px solid color-mix(in srgb, var(--brand) 30%, transparent); }
+.guide-ms-head h3 { margin: 0; font-size: 1.02rem; }
+.guide-ms-head .phase { font-size: .74rem; color: var(--text-mut); }
+.guide-ms > .th { margin: 0 0 5px; font-size: .88rem; line-height: 1.55; }
+.guide-ms > .en { margin: 0; font-size: .8rem; color: var(--text-soft); font-style: italic; line-height: 1.5; }
+.guide-tasks { margin: 12px 0 0; padding: 12px 0 0; border-top: 1px dashed var(--border); list-style: none; }
+.guide-tasks > li { margin: 8px 0; font-size: .86rem; }
+.guide-tasks > li > b { color: var(--text); }
+.gt-desc { margin-top: 2px; }
+.gt-desc .th { display: block; font-size: .8rem; color: var(--text-soft); }
+.gt-desc .en { display: block; font-size: .76rem; color: var(--text-mut); font-style: italic; }
+
+@media (max-width: 620px) { .gl-row { width: 100%; } }
+
 /* ================= Sync badge ================= */
 .sync {
   display: inline-flex; align-items: center; gap: 6px; font-size: .74rem; font-weight: 650;

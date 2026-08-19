@@ -9,7 +9,7 @@
  * the whole board syncs live across everyone through one Firestore doc.
  * With no config it falls back to this browser's localStorage.
  * ------------------------------------------------------------------ */
-import { PROJECT, STATUSES, WEEKS, MILESTONES, GRID, SCHEDULE } from './data.js';
+import { PROJECT, STATUSES, WEEKS, MILESTONES, GRID, SCHEDULE, DESCRIPTIONS } from './data.js';
 
 const BOARD_ID = window.TRACKER_BOARD_ID || 'thai-audio-p2';
 const FIREBASE_CONFIG = window.FIREBASE_CONFIG || {};
@@ -224,8 +224,14 @@ function taskRowHTML(t) {
     </div>${isExp ? detailHTML(t) : ''}`;
 }
 
+function descHTML(id) {
+  const d = DESCRIPTIONS[id];
+  if (!d) return '';
+  return `<div class="desc-block"><p class="th">${esc(d.th)}</p><p class="en">${esc(d.en)}</p></div>`;
+}
+
 function detailHTML(t) {
-  let inner = '';
+  let inner = descHTML(t.id);
   if (t.lines?.length) inner += `<ul class="lines">${t.lines.map((x) => `<li>${esc(x)}</li>`).join('')}</ul>`;
   if (t.detail) {
     inner += `<div class="detail-groups">` + Object.entries(t.detail).map(([g, items]) =>
@@ -382,10 +388,78 @@ async function initRemote() {
   }
 }
 
+/* ---------------- Guide tab ---------------- */
+function renderGuide() {
+  const statusRows = STATUSES.filter((s) => s.key !== 'NS').map((s) =>
+    `<div class="gl-row"><span class="gl-code" style="background:${s.color}">${s.key}</span><span>${s.label}</span></div>`).join('');
+
+  const msCards = MILESTONES.map((m) => {
+    const d = DESCRIPTIONS[m.id];
+    const tasks = m.tasks.map((t) => {
+      const td = DESCRIPTIONS[t.id];
+      return `<li><b>${esc(t.title)}</b>${td ? `<div class="gt-desc"><span class="th">${esc(td.th)}</span><span class="en">${esc(td.en)}</span></div>` : ''}</li>`;
+    }).join('');
+    return `<div class="guide-ms">
+      <div class="guide-ms-head"><span class="mno">${esc(m.no)}</span>
+        <div><h3>${esc(m.name)}</h3><span class="phase">${esc(m.phase || '')}</span></div></div>
+      ${d ? `<p class="th">${esc(d.th)}</p><p class="en">${esc(d.en)}</p>` : ''}
+      <ul class="guide-tasks">${tasks}</ul>
+    </div>`;
+  }).join('');
+
+  $('#view-guide').innerHTML = `
+    <div class="guide">
+      <div class="guide-intro">
+        <h2>${esc(PROJECT.title)} — ${esc(PROJECT.subtitle)}</h2>
+        <p class="th">โครงการเก็บเสียงพูดภาษาไทย เฟส 2 มีเป้าหมายส่งมอบ <b>500 คู่ที่ผ่านการตรวจ QC</b> โดยแบ่งงานเป็น
+          11 milestone ตั้งแต่การเปิดหาผู้เข้าร่วม → ทดลองนำร่อง → ส่งงานรายสัปดาห์ที่คงที่ → ขยายผล → ตรวจ QC และปิดโครงการ
+          หน้านี้อธิบายว่าแต่ละช่วงคืออะไรและทำไปเพื่ออะไร</p>
+        <p class="en">Thai audio-collection project, Phase 2, delivering <b>500 QC-passed pairs</b> across 11 milestones —
+          from acquisition launch → pilots → stable weekly delivery → scale → QC and closure. This page explains what
+          each stage is and why it matters.</p>
+      </div>
+
+      <div class="guide-how">
+        <h3>วิธีใช้ตาราง / How to use the tracker</h3>
+        <ul>
+          <li><span class="th">แต่ละงานตั้ง <b>สถานะ</b>ได้จากเมนูดรอปดาวน์ (สีของแถบจะเปลี่ยนตามสถานะ)</span>
+              <span class="en">Set each task's <b>status</b> from its dropdown — the bar takes the status colour.</span></li>
+          <li><span class="th"><b>คลิกช่องวัน</b>ในตารางเพื่อระบาย/ลบวันที่ทำงานเอง (เหมือนกรอกเซลล์ใน Excel)</span>
+              <span class="en"><b>Click a day cell</b> to paint/unpaint working days, just like the spreadsheet.</span></li>
+          <li><span class="th">คลิก<b>ชื่องาน</b>เพื่อกางดูรายละเอียด เจ้าของงาน และคำอธิบาย</span>
+              <span class="en">Click a <b>task title</b> to expand its details, owners, and description.</span></li>
+          <li><span class="th">ข้อมูล<b>ซิงก์อัตโนมัติ</b>ทุกคนเมื่อเชื่อม Firebase (ดูสถานะมุมขวาบน)</span>
+              <span class="en">Data <b>syncs across everyone</b> when Firebase is connected (see the badge, top-right).</span></li>
+        </ul>
+        <div class="guide-legend"><div class="gl-title">Status codes</div>${statusRows}</div>
+      </div>
+
+      <h3 class="guide-h">Milestones — อธิบายทีละช่วง</h3>
+      ${msCards}
+    </div>`;
+}
+
+let currentView = 'tracker';
+function wireTabs() {
+  document.querySelectorAll('.tab').forEach((tab) => {
+    tab.addEventListener('click', () => {
+      const v = tab.dataset.view;
+      if (v === currentView) return;
+      currentView = v;
+      document.querySelectorAll('.tab').forEach((t) => t.classList.toggle('active', t === tab));
+      $('#view-tracker').hidden = v !== 'tracker';
+      $('#view-guide').hidden = v !== 'guide';
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    });
+  });
+}
+
 /* ---------------- boot ---------------- */
 renderHeader();
 renderLegend();
 renderFilters();
+renderGuide();
+wireTabs();
 // persistent scroll container
 $('#board').innerHTML = '<div class="gantt-wrap" id="gantt-wrap"></div>';
 renderHero();
