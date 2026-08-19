@@ -1351,6 +1351,7 @@ const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', '
 const WD = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
 const WD_ORDER = [[1, 'M'], [2, 'T'], [3, 'W'], [4, 'Th'], [5, 'F'], [6, 'Sa'], [0, 'Su']];
 const ROLE_KEYS = { poc1: 'POC1', poc2: 'POC2', mgmt: 'Management', ops: 'Ops', ta: 'TA' };
+const ROLE_OPTS = ['POC1', 'POC2', 'Management', 'Ops', 'TA'];
 const uid = (p) => p + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
 const clone = (x) => (x == null ? x : JSON.parse(JSON.stringify(x)));
 
@@ -1549,10 +1550,17 @@ function taskReadHTML(t) {
 function taskEditHTML(t) {
   const s = t.schedule || {};
   const wdSet = new Set(s.weekdays || []);
-  const owners = (t.owners || []).map((o, i) => `<div class="ef-owner">
-      <input class="ef-in ef-orole" data-oid="${t.id}" data-oidx="${i}" list="rolelist" placeholder="Role" value="${escAttr(o.role)}">
+  const owners = (t.owners || []).map((o, i) => {
+    const cur = o.role || '';
+    const opts = (!cur || ROLE_OPTS.includes(cur)) ? ROLE_OPTS : [cur, ...ROLE_OPTS];
+    return `<div class="ef-owner">
+      <select class="ef-in ef-orole" data-oid="${t.id}" data-oidx="${i}">
+        <option value="">— role —</option>
+        ${opts.map((r) => `<option ${r === cur ? 'selected' : ''}>${esc(r)}</option>`).join('')}
+      </select>
       <input class="ef-in ef-oname" data-oid="${t.id}" data-oidx="${i}" placeholder="Name" value="${escAttr(o.who)}">
-      <button class="ef-x" data-odel="${t.id}" data-oidx="${i}" title="Remove role">✕</button></div>`).join('');
+      <button class="ef-x" data-odel="${t.id}" data-oidx="${i}" title="Remove owner">✕</button></div>`;
+  }).join('');
   const groups = Object.entries(t.detail || {}).map(([g, items]) => `<div class="ef-group">
       <input class="ef-in ef-gname" data-gid="${t.id}" data-gkey="${escAttr(g)}" value="${escAttr(g)}" placeholder="Group name">
       <button class="ef-x" data-gdel="${t.id}" data-gkey="${escAttr(g)}" title="Remove group">✕</button>
@@ -1708,13 +1716,14 @@ function wireBoard() {
       return;
     }
     if (n.dataset.mf && n.dataset.mid) { setMsField(n.dataset.mid, n.dataset.mf, n.value); return; }
-    if (n.classList.contains('ef-orole') || n.classList.contains('ef-oname')) { const f = findTask(n.dataset.oid); const o = f.t.owners[+n.dataset.oidx]; if (o) { if (n.classList.contains('ef-orole')) o.role = n.value; else o.who = n.value; commit(); } return; }
+    if (n.classList.contains('ef-oname')) { const f = findTask(n.dataset.oid); const o = f.t.owners[+n.dataset.oidx]; if (o) { o.who = n.value; commit(); } return; }
     if (n.classList.contains('ef-gitems')) { findTask(n.dataset.gid).t.detail[n.dataset.gkey] = n.value.split('\n').map((x) => x.trim()).filter(Boolean); commit(); return; }
     if (n.classList.contains('ef-note') || n.dataset.note) { findTask(n.dataset.note).t.note = n.value; commit(); return; }
   });
 
   wrap.addEventListener('change', (e) => {
     const n = e.target;
+    if (n.classList.contains('ef-orole')) { const f = findTask(n.dataset.oid); const o = f.t.owners[+n.dataset.oidx]; if (o) { o.role = n.value; commit(); rebuildBoard(); } return; }
     if (n.dataset.status) { findTask(n.dataset.status).t.status = n.value; commit(); refreshAll(); toast(`Status → ${byKey[n.value].label}`); return; }
     if (n.dataset.note !== undefined && n.classList.contains('note-input')) { findTask(n.dataset.note).t.note = n.value.trim(); commit(); toast('Note saved'); return; }
     if (n.classList.contains('ef-gname')) { const t = findTask(n.dataset.gid).t; const old = n.dataset.gkey, val = n.value.trim() || 'group'; if (val !== old) { const items = t.detail[old]; delete t.detail[old]; t.detail[val] = items; commit(); rebuildBoard(); } return; }
