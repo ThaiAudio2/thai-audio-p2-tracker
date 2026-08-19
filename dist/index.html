@@ -1581,7 +1581,7 @@ const expanded = new Set();
 function headerHTML() {
   const weeks = WEEK_GROUPS.map((w) => `<div class="g-week" style="flex-basis:${w.days.length * 34}px"><span class="wk">${esc(w.label)}</span><span class="rg">${esc(w.range)}</span></div>`).join('');
   const days = DAYS.map((d) => `<div class="g-day ${d.isWeekend ? 'wknd' : ''} ${d.isToday ? 'today' : ''} ${d.isMonthStart ? 'mstart' : ''}"><span class="mo">${d.dayNum === 1 || d === DAYS[0] ? MONTHS[d.month] : ''}</span><span class="dn">${d.dayNum}</span><span class="dw">${WD[d.dow]}</span></div>`).join('');
-  return `<div class="g-header"><div class="g-corner"><span>Task</span><span class="hint">${editing ? 'edit mode — click fields to change' : 'click a day cell to set its status'}</span></div>
+  return `<div class="g-header"><div class="g-corner"><span>Task</span><span class="hint">${editing ? 'edit mode — click a task title to edit it' : 'click a day cell to set its status'}</span></div>
       <div class="g-headcols"><div class="g-weeks">${weeks}</div><div class="g-days">${days}</div></div></div>`;
 }
 
@@ -1611,7 +1611,7 @@ function taskRowHTML(t) {
   const kind = schedKind(t); const cur = hasSub ? parentStatus(t) : (t.status || 'NS'); const done = !!byKey[cur]?.done;
   const owners = (t.owners || []).map((o) => `<span class="owner"><b>${esc(o.role)}</b> ${esc(o.who)}</span>`).join('');
   const laterTag = kind === 'future' ? `<span class="tag future">→ ${MONTHS[+t.schedule.start.slice(5, 7) - 1]} ${t.schedule.start.slice(0, 4)}</span>` : kind === 'conditional' ? `<span class="tag cond">as needed</span>` : '';
-  const isExp = expanded.has(t.id) || editing;
+  const isExp = expanded.has(t.id);
   const statusCtl = hasSub
     ? `<span class="status-chip" style="--st:${byKey[cur].color}" title="rolled up from ${t.subtasks.length} sub-tasks">${cur === 'NS' ? '—' : cur} · ${byKey[cur].label}</span>`
     : `<select class="status-select" data-status="${t.id}" style="--st:${byKey[cur].color}">
@@ -1626,8 +1626,14 @@ function taskRowHTML(t) {
       </div>${hasSub ? cellsRollupHTML(t) : cellsHTML(t, t)}
     </div>`;
   if (isExp) {
-    if (hasSub) html += subRowsHTML(t);
-    html += `<div class="g-detail" data-detail="${t.id}"><div class="g-detail-in">${editing ? taskEditHTML(t) : taskReadHTML(t)}</div></div>`;
+    if (editing) {
+      // Edit mode: show the task's edit form right here (title, owners +add,
+      // sub-tasks +add/rename/delete, schedule) — no read-only sub-day rows.
+      html += `<div class="g-detail" data-detail="${t.id}"><div class="g-detail-in">${taskEditHTML(t)}</div></div>`;
+    } else {
+      if (hasSub) html += subRowsHTML(t);
+      html += `<div class="g-detail" data-detail="${t.id}"><div class="g-detail-in">${taskReadHTML(t)}</div></div>`;
+    }
   }
   return html;
 }
