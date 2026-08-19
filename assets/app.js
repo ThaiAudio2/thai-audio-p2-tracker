@@ -1,129 +1,122 @@
 /* ------------------------------------------------------------------ *
  * Thai Audio — P2 Project Milestone & Tracker
  *
- * Spreadsheet-style Gantt board with a continuous date axis (like the
- * source sheet). Each task has a schedule bar you can repaint by clicking
- * day cells; status + notes + painted days are the shared state.
+ * Spreadsheet-style Gantt board with a continuous date axis. The whole
+ * board (milestones + tasks + status/notes/painted days) is one editable,
+ * synced document:
+ *   - Edit mode lets you add/rename/delete/reorder milestones & tasks and
+ *     edit titles, descriptions, owners/roles and schedule dates.
+ *   - With a Firebase config the board syncs live across everyone; without
+ *     one it saves to this browser's localStorage.
  *
- * Sync: if a Firebase web config is provided (window.FIREBASE_CONFIG),
- * the whole board syncs live across everyone through one Firestore doc.
- * With no config it falls back to this browser's localStorage.
+ * data.js is the SEED — the starting content. Once you edit in the app,
+ * your edits live in the synced board, not in data.js.
  * ------------------------------------------------------------------ */
 import { PROJECT, STATUSES, WEEKS, MILESTONES, GRID, SCHEDULE, DESCRIPTIONS } from './data.js';
 
 const BOARD_ID = window.TRACKER_BOARD_ID || 'thai-audio-p2';
 const FIREBASE_CONFIG = window.FIREBASE_CONFIG || {};
-const STORE_KEY = 'thaiaudio-p2-tracker.v2';
+const STORE_KEY = 'thaiaudio-p2-tracker.v3';
+const LEGACY_KEY = 'thaiaudio-p2-tracker.v2';
 
 const byKey = Object.fromEntries(STATUSES.map((s) => [s.key, s]));
-const ALL_TASKS = MILESTONES.flatMap((m) => m.tasks.map((t) => ({ ...t, ms: m })));
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const WD = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
+const WD_ORDER = [[1, 'M'], [2, 'T'], [3, 'W'], [4, 'Th'], [5, 'F'], [6, 'Sa'], [0, 'Su']];
+const ROLE_KEYS = { poc1: 'POC1', poc2: 'POC2', mgmt: 'Management', ops: 'Ops', ta: 'TA' };
+const uid = (p) => p + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+const clone = (x) => (x == null ? x : JSON.parse(JSON.stringify(x)));
 
 /* ---------------- day grid ---------------- */
 function buildDays() {
   const out = [];
   const start = new Date(GRID.start + 'T00:00:00');
   for (let i = 0; i < GRID.weeks * 7; i++) {
-    const d = new Date(start);
-    d.setDate(d.getDate() + i);
+    const d = new Date(start); d.setDate(d.getDate() + i);
     const iso = d.toISOString().slice(0, 10);
-    const dow = d.getDay();
-    out.push({
-      iso, dow, dayNum: d.getDate(), month: d.getMonth(),
-      weekIndex: Math.floor(i / 7),
-      isWeekend: dow === 0 || dow === 6,
-      isToday: iso === GRID.today,
-      isMonthStart: d.getDate() === 1 || i === 0,
-    });
+    out.push({ iso, dow: d.getDay(), dayNum: d.getDate(), month: d.getMonth(), weekIndex: Math.floor(i / 7),
+      isWeekend: d.getDay() === 0 || d.getDay() === 6, isToday: iso === GRID.today, isMonthStart: d.getDate() === 1 || i === 0 });
   }
   return out;
 }
 const DAYS = buildDays();
 const GRID_END = DAYS[DAYS.length - 1].iso;
-const WEEK_GROUPS = WEEKS.map((w, i) => {
-  const days = DAYS.filter((d) => d.weekIndex === i);
-  return { ...w, days };
-});
+const WEEK_GROUPS = WEEKS.map((w, i) => ({ ...w, days: DAYS.filter((d) => d.weekIndex === i) }));
 
-/* ---------------- state + persistence ---------------- */
-const loadLocal = () => {
-  try { return JSON.parse(localStorage.getItem(STORE_KEY)) || {}; }
-  catch { return {}; }
-};
-let state = loadLocal();
-const saveLocal = () => localStorage.setItem(STORE_KEY, JSON.stringify(state));
+/* ---------------- board model (seed + persistence) ---------------- */
+function ownersToArray(o) {
+  if (!o) return [];
+  return Object.entries(o).filter(([, v]) => v).map(([k, v]) => ({ role: ROLE_KEYS[k] || k, who: v }));
+}
+function seedBoard() {
+  return MILESTONES.map((m) => ({
+    id: m.id, no: m.no, name: m.name, phase: m.phase || '',
+    desc: clone(DESCRIPTIONS[m.id]) || { th: '', en: '' },
+    tasks: m.tasks.map((t) => ({
+      id: t.id, title: t.title,
+      desc: clone(DESCRIPTIONS[t.id]) || { th: '', en: '' },
+      owners: ownersToArray(t.owners),
+      lines: t.lines ? [...t.lines] : [],
+      detail: t.detail ? clone(t.detail) : {},
+      remarks: t.remarks ? [...t.remarks] : [],
+      schedule: SCHEDULE[t.id] ? clone(SCHEDULE[t.id]) : null,
+      status: 'NS', note: '', days: {},
+    })),
+  }));
+}
+function applyLegacy(board, legacy) {
+  if (!legacy) return;
+  for (const m of board) for (const t of m.tasks) {
+    const L = legacy[t.id]; if (!L) continue;
+    if (L.status) t.status = L.status;
+    if (L.note) t.note = L.note;
+    if (L.days) t.days = { ...t.days, ...L.days };
+  }
+}
+function loadLocal() {
+  try { const raw = JSON.parse(localStorage.getItem(STORE_KEY)); if (raw && Array.isArray(raw.board)) return raw.board; } catch {}
+  const board = seedBoard();
+  try { const legacy = JSON.parse(localStorage.getItem(LEGACY_KEY)); applyLegacy(board, legacy); } catch {}
+  return board;
+}
+let BOARD = loadLocal();
+const saveLocal = () => localStorage.setItem(STORE_KEY, JSON.stringify({ board: BOARD }));
 
-const statusOf = (id) => state[id]?.status || 'NS';
-const noteOf = (id) => state[id]?.note || '';
-const dayOverride = (id, iso) => state[id]?.days?.[iso];
+// find helpers
+const allTasks = () => BOARD.flatMap((m) => m.tasks.map((t) => ({ t, m })));
+const findTask = (id) => { for (let mi = 0; mi < BOARD.length; mi++) { const ti = BOARD[mi].tasks.findIndex((t) => t.id === id); if (ti >= 0) return { mi, ti, m: BOARD[mi], t: BOARD[mi].tasks[ti] }; } return null; };
+const findMs = (id) => { const mi = BOARD.findIndex((m) => m.id === id); return mi < 0 ? null : { mi, m: BOARD[mi] }; };
 
-function setStatus(id, val) {
-  state[id] = { ...(state[id] || {}), status: val };
-  saveLocal(); pushRemote(`tasks.${id}.status`, val);
+/* mutate + persist */
+let remotePushTimer, lastPushed = '';
+function commit(sync = true) {
+  saveLocal();
+  if (sync && remote) { clearTimeout(remotePushTimer); remotePushTimer = setTimeout(pushBoard, 350); }
 }
-function setNote(id, val) {
-  state[id] = { ...(state[id] || {}), note: val };
-  saveLocal(); pushRemote(`tasks.${id}.note`, val);
-}
-function setDay(id, iso, on) {
-  const days = { ...(state[id]?.days || {}) };
-  days[iso] = on ? 1 : 0;
-  state[id] = { ...(state[id] || {}), days };
-  saveLocal(); pushRemote(`tasks.${id}.days.${iso}`, on ? 1 : 0);
-}
-
-/* ---------------- schedule / painting ---------------- */
-function schedKind(id) {
-  const s = SCHEDULE[id];
-  if (!s) return 'none';
-  if (s.conditional) return 'conditional';
-  if (s.start && s.start > GRID_END) return 'future';
-  return 'grid';
-}
-function defaultActive(id, day) {
-  const s = SCHEDULE[id];
-  if (!s || s.conditional) return false;
-  if (s.start && day.iso < s.start) return false;
-  if (s.end && day.iso > s.end) return false;
-  if (s.weekdays && !s.weekdays.includes(day.dow)) return false;
-  return true;
-}
-function isPainted(id, day) {
-  const o = dayOverride(id, day.iso);
-  if (o !== undefined) return !!o;
-  return defaultActive(id, day);
+function pushBoard() {
+  if (!remote) return;
+  const json = JSON.stringify(BOARD);
+  lastPushed = json;
+  remote.replaceBoard(BOARD);
 }
 
 /* ---------------- helpers ---------------- */
 const $ = (sel, el = document) => el.querySelector(sel);
 const el = (tag, cls, html) => { const n = document.createElement(tag); if (cls) n.className = cls; if (html != null) n.innerHTML = html; return n; };
-const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-const owis = (t) => {
-  const o = t.owners || {}; const out = [];
-  if (o.poc1) out.push(['POC1', o.poc1]); if (o.poc2) out.push(['POC2', o.poc2]);
-  if (o.mgmt) out.push(['Mgmt', o.mgmt]); if (o.ops) out.push(['Ops', o.ops]); if (o.ta) out.push(['TA', o.ta]);
-  return out;
-};
-const ownerNames = (t) => owis(t).map(([, v]) => v);
+const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const escAttr = (s) => esc(s).replace(/'/g, '&#39;');
 
 let toastTimer;
-const toast = (msg) => {
-  let t = $('.toast'); if (!t) { t = el('div', 'toast'); document.body.appendChild(t); }
-  t.textContent = msg; t.classList.add('show');
-  clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove('show'), 1800);
-};
+const toast = (msg) => { let t = $('.toast'); if (!t) { t = el('div', 'toast'); document.body.appendChild(t); } t.textContent = msg; t.classList.add('show'); clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove('show'), 1800); };
+
+const statusColor = (t) => byKey[t.status || 'NS'].color;
+const ownerNames = (t) => (t.owners || []).map((o) => o.who);
 
 /* ---------------- metrics ---------------- */
 function metrics() {
-  const total = ALL_TASKS.length;
-  let done = 0, active = 0;
+  const tasks = allTasks(); const total = tasks.length; let done = 0, active = 0;
   const dist = Object.fromEntries(STATUSES.map((s) => [s.key, 0]));
-  for (const t of ALL_TASKS) {
-    const k = statusOf(t.id); dist[k]++;
-    if (byKey[k]?.done) done++;
-    else if (k !== 'NS' && !byKey[k]?.stopped) active++;
-  }
+  for (const { t } of tasks) { const k = t.status || 'NS'; dist[k] = (dist[k] || 0) + 1; if (byKey[k]?.done) done++; else if (k !== 'NS' && !byKey[k]?.stopped) active++; }
   return { total, done, active, pct: total ? Math.round((done / total) * 100) : 0, dist };
 }
 
@@ -137,173 +130,253 @@ function renderHeader() {
 }
 function renderHero() {
   const m = metrics();
-  $('#ring').style.setProperty('--p', m.pct);
-  $('#ring span').textContent = m.pct + '%';
+  $('#ring').style.setProperty('--p', m.pct); $('#ring span').textContent = m.pct + '%';
   const kpis = [
     { n: m.done, l: 'Tasks completed', sub: `of ${m.total} total` },
     { n: m.active, l: 'In flight', sub: 'started, not done' },
-    { n: MILESTONES.length - 1, l: 'Milestones', sub: '+ setup phase' },
+    { n: BOARD.length, l: 'Milestones', sub: 'sections' },
     { n: `${GRID.weeks}w`, l: 'On the grid', sub: 'Aug 17 – Oct 04' },
   ];
   $('#kpis').innerHTML = kpis.map((k) => `<div class="kpi"><div class="n">${k.n}</div><div class="l">${k.l}</div><div class="sub">${k.sub}</div></div>`).join('');
   const shown = STATUSES.filter((s) => m.dist[s.key] > 0);
-  $('#dist').innerHTML =
-    `<div class="section-title">Status distribution</div>
+  $('#dist').innerHTML = `<div class="section-title">Status distribution</div>
      <div class="dist-bar">${shown.map((s) => `<span style="width:${(m.dist[s.key] / m.total) * 100}%;background:${s.color}" title="${s.label}: ${m.dist[s.key]}"></span>`).join('')}</div>
      <div class="dist-key">${shown.map((s) => `<span class="k"><span class="sw" style="background:${s.color}"></span>${s.label} · ${m.dist[s.key]}</span>`).join('')}</div>`;
 }
-function renderLegend() {
-  $('#legend').innerHTML = STATUSES.filter((s) => s.key !== 'NS').map((s) => `<span class="chip"><span class="sw" style="background:${s.color}"></span>${s.key} · ${s.label}</span>`).join('');
-}
+function renderLegend() { $('#legend').innerHTML = STATUSES.filter((s) => s.key !== 'NS').map((s) => `<span class="chip"><span class="sw" style="background:${s.color}"></span>${s.key} · ${s.label}</span>`).join(''); }
 function renderFilters() {
   $('#f-status').innerHTML = '<option value="">All statuses</option>' + STATUSES.map((s) => `<option value="${s.key}">${s.key} · ${s.label}</option>`).join('');
-  const owners = [...new Set(ALL_TASKS.flatMap(ownerNames))].sort();
-  $('#f-owner').innerHTML = '<option value="">All owners</option>' + owners.map((o) => `<option value="${esc(o)}">${esc(o)}</option>`).join('');
+  const owners = [...new Set(allTasks().flatMap(({ t }) => ownerNames(t)))].filter(Boolean).sort();
+  $('#f-owner').innerHTML = '<option value="">All owners</option>' + owners.map((o) => `<option value="${escAttr(o)}">${esc(o)}</option>`).join('');
 }
 
-/* ---------------- Gantt board ---------------- */
+/* ---------------- schedule / painting ---------------- */
+function schedKind(t) { const s = t.schedule; if (!s) return 'none'; if (s.conditional) return 'conditional'; if (s.start && s.start > GRID_END) return 'future'; return 'grid'; }
+function defaultActive(t, day) { const s = t.schedule; if (!s || s.conditional) return false; if (s.start && day.iso < s.start) return false; if (s.end && day.iso > s.end) return false; if (s.weekdays && !s.weekdays.includes(day.dow)) return false; return true; }
+function isPainted(t, day) { const o = t.days?.[day.iso]; if (o !== undefined) return !!o; return defaultActive(t, day); }
+
+/* ---------------- board render ---------------- */
+let editing = false;
 const collapsed = new Set();
 const expanded = new Set();
 
 function headerHTML() {
-  const weeks = WEEK_GROUPS.map((w) =>
-    `<div class="g-week" style="flex-basis:${w.days.length * 34}px">
-       <span class="wk">${esc(w.label)}</span><span class="rg">${esc(w.range)}</span>
-     </div>`).join('');
-  const days = DAYS.map((d) =>
-    `<div class="g-day ${d.isWeekend ? 'wknd' : ''} ${d.isToday ? 'today' : ''} ${d.isMonthStart ? 'mstart' : ''}">
-       <span class="mo">${d.dayNum === 1 || d === DAYS[0] ? MONTHS[d.month] : ''}</span>
-       <span class="dn">${d.dayNum}</span>
-       <span class="dw">${WD[d.dow]}</span>
-     </div>`).join('');
-  return `<div class="g-header">
-      <div class="g-corner"><span>Task</span><span class="hint">click a day cell to paint it</span></div>
-      <div class="g-headcols">
-        <div class="g-weeks">${weeks}</div>
-        <div class="g-days">${days}</div>
-      </div>
-    </div>`;
+  const weeks = WEEK_GROUPS.map((w) => `<div class="g-week" style="flex-basis:${w.days.length * 34}px"><span class="wk">${esc(w.label)}</span><span class="rg">${esc(w.range)}</span></div>`).join('');
+  const days = DAYS.map((d) => `<div class="g-day ${d.isWeekend ? 'wknd' : ''} ${d.isToday ? 'today' : ''} ${d.isMonthStart ? 'mstart' : ''}"><span class="mo">${d.dayNum === 1 || d === DAYS[0] ? MONTHS[d.month] : ''}</span><span class="dn">${d.dayNum}</span><span class="dw">${WD[d.dow]}</span></div>`).join('');
+  return `<div class="g-header"><div class="g-corner"><span>Task</span><span class="hint">${editing ? 'edit mode — click fields to change' : 'click a day cell to paint it'}</span></div>
+      <div class="g-headcols"><div class="g-weeks">${weeks}</div><div class="g-days">${days}</div></div></div>`;
+}
+
+function cellsHTML(t) {
+  let out = '';
+  DAYS.forEach((d, i) => {
+    const on = isPainted(t, d);
+    const prev = i > 0 && isPainted(t, DAYS[i - 1]);
+    const next = i < DAYS.length - 1 && isPainted(t, DAYS[i + 1]);
+    const color = (t.status || 'NS') === 'NS' ? 'var(--plan)' : statusColor(t);
+    const cls = ['g-cell', d.isWeekend ? 'wknd' : '', d.isToday ? 'today' : '', on ? 'on' : '', on && !prev ? 'st' : '', on && !next ? 'en' : ''].filter(Boolean).join(' ');
+    out += `<div class="${cls}" data-cell="${t.id}" data-iso="${d.iso}" ${on ? `style="--c:${color}"` : ''}></div>`;
+  });
+  return out;
 }
 
 function taskRowHTML(t) {
-  const kind = schedKind(t.id);
-  const cur = statusOf(t.id);
-  const done = !!byKey[cur]?.done;
-
-  // day cells
-  let cells = '';
-  DAYS.forEach((d, i) => {
-    const on = isPainted(t.id, d);
-    const prev = i > 0 && isPainted(t.id, DAYS[i - 1]);
-    const next = i < DAYS.length - 1 && isPainted(t.id, DAYS[i + 1]);
-    const color = cur === 'NS' ? 'var(--plan)' : byKey[cur].color;
-    const cls = ['g-cell', d.isWeekend ? 'wknd' : '', d.isToday ? 'today' : '',
-      on ? 'on' : '', on && !prev ? 'st' : '', on && !next ? 'en' : ''].filter(Boolean).join(' ');
-    cells += `<div class="${cls}" data-id="${t.id}" data-iso="${d.iso}" ${on ? `style="--c:${color}"` : ''}></div>`;
-  });
-
-  const owners = owis(t).map(([r, w]) => `<span class="owner"><b>${r}</b> ${esc(w)}</span>`).join('');
-  const laterTag = kind === 'future' ? `<span class="tag future">→ ${MONTHS[+SCHEDULE[t.id].start.slice(5, 7) - 1]} ${SCHEDULE[t.id].start.slice(0, 4)}</span>`
-    : kind === 'conditional' ? `<span class="tag cond">as needed</span>` : '';
-  const isExp = expanded.has(t.id);
-
-  return `<div class="g-row ${done ? 'done' : ''}" data-id="${t.id}">
+  const kind = schedKind(t); const cur = t.status || 'NS'; const done = !!byKey[cur]?.done;
+  const owners = (t.owners || []).map((o) => `<span class="owner"><b>${esc(o.role)}</b> ${esc(o.who)}</span>`).join('');
+  const laterTag = kind === 'future' ? `<span class="tag future">→ ${MONTHS[+t.schedule.start.slice(5, 7) - 1]} ${t.schedule.start.slice(0, 4)}</span>` : kind === 'conditional' ? `<span class="tag cond">as needed</span>` : '';
+  const isExp = expanded.has(t.id) || editing;
+  return `<div class="g-row ${done ? 'done' : ''}" data-row="${t.id}">
       <div class="g-info">
-        <button class="g-title ${isExp ? 'open' : ''}" data-toggle="${t.id}" title="Show details">
+        <button class="g-title ${isExp ? 'open' : ''}" data-toggle="${t.id}">
           <svg class="tw" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M9 6l6 6-6 6"/></svg>
-          <span>${esc(t.title)}</span>${laterTag}
-        </button>
+          <span>${esc(t.title)}</span>${laterTag}</button>
         <div class="g-owner-row">
-          <select class="status-select" data-id="${t.id}" style="--st:${byKey[cur].color}">
+          <select class="status-select" data-status="${t.id}" style="--st:${byKey[cur].color}">
             ${STATUSES.map((o) => `<option value="${o.key}" ${o.key === cur ? 'selected' : ''}>${o.key === 'NS' ? '— Not started' : `${o.key} · ${o.label}`}</option>`).join('')}
           </select>
           ${owners ? `<div class="owner-tags">${owners}</div>` : ''}
         </div>
-      </div>
-      ${cells}
-    </div>${isExp ? detailHTML(t) : ''}`;
+      </div>${cellsHTML(t)}
+    </div>${isExp ? `<div class="g-detail" data-detail="${t.id}"><div class="g-detail-in">${editing ? taskEditHTML(t) : taskReadHTML(t)}</div></div>` : ''}`;
 }
 
-function descHTML(id) {
-  const d = DESCRIPTIONS[id];
-  if (!d) return '';
-  return `<div class="desc-block"><p class="th">${esc(d.th)}</p><p class="en">${esc(d.en)}</p></div>`;
-}
-
-function detailHTML(t) {
-  let inner = descHTML(t.id);
+function taskReadHTML(t) {
+  let inner = t.desc && (t.desc.th || t.desc.en) ? `<div class="desc-block"><p class="th">${esc(t.desc.th)}</p><p class="en">${esc(t.desc.en)}</p></div>` : '';
   if (t.lines?.length) inner += `<ul class="lines">${t.lines.map((x) => `<li>${esc(x)}</li>`).join('')}</ul>`;
-  if (t.detail) {
-    inner += `<div class="detail-groups">` + Object.entries(t.detail).map(([g, items]) =>
-      `<div class="detail-group"><div class="gh">${esc(g)}</div><ul>${items.map((i) => `<li>${esc(i)}</li>`).join('')}</ul></div>`).join('') + `</div>`;
-  }
+  if (t.detail && Object.keys(t.detail).length) inner += `<div class="detail-groups">` + Object.entries(t.detail).map(([g, items]) => `<div class="detail-group"><div class="gh">${esc(g)}</div><ul>${items.map((i) => `<li>${esc(i)}</li>`).join('')}</ul></div>`).join('') + `</div>`;
   if (t.remarks?.length) inner += `<div class="remarks"><div class="rh">Remarks</div><ul>${t.remarks.map((r) => `<li>${esc(r)}</li>`).join('')}</ul></div>`;
-  inner += `<div class="note-row"><span class="ni">✎</span><input class="note-input" data-id="${t.id}" type="text" placeholder="Add a note or update…" value="${esc(noteOf(t.id))}"></div>`;
-  return `<div class="g-detail" data-detail="${t.id}"><div class="g-detail-in">${inner}</div></div>`;
+  inner += `<div class="note-row"><span class="ni">✎</span><input class="note-input" data-note="${t.id}" type="text" placeholder="Add a note or update…" value="${escAttr(t.note)}"></div>`;
+  return inner;
 }
 
-function msProgress(m) {
-  const done = m.tasks.filter((t) => byKey[statusOf(t.id)]?.done).length;
-  return { done, total: m.tasks.length, pct: m.tasks.length ? Math.round((done / m.tasks.length) * 100) : 0 };
+/* ---------- edit form ---------- */
+function taskEditHTML(t) {
+  const s = t.schedule || {};
+  const wdSet = new Set(s.weekdays || []);
+  const owners = (t.owners || []).map((o, i) => `<div class="ef-owner">
+      <input class="ef-in ef-orole" data-oid="${t.id}" data-oidx="${i}" list="rolelist" placeholder="Role" value="${escAttr(o.role)}">
+      <input class="ef-in ef-oname" data-oid="${t.id}" data-oidx="${i}" placeholder="Name" value="${escAttr(o.who)}">
+      <button class="ef-x" data-odel="${t.id}" data-oidx="${i}" title="Remove role">✕</button></div>`).join('');
+  const groups = Object.entries(t.detail || {}).map(([g, items]) => `<div class="ef-group">
+      <input class="ef-in ef-gname" data-gid="${t.id}" data-gkey="${escAttr(g)}" value="${escAttr(g)}" placeholder="Group name">
+      <button class="ef-x" data-gdel="${t.id}" data-gkey="${escAttr(g)}" title="Remove group">✕</button>
+      <textarea class="ef-ta ef-gitems" data-gid="${t.id}" data-gkey="${escAttr(g)}" rows="3" placeholder="One item per line">${esc((items || []).join('\n'))}</textarea></div>`).join('');
+  return `<div class="ef">
+    <label class="ef-l">Task title</label>
+    <input class="ef-in" data-f="title" data-id="${t.id}" value="${escAttr(t.title)}">
+    <div class="ef-2">
+      <div><label class="ef-l">คำอธิบาย (ไทย)</label><textarea class="ef-ta" data-f="desc.th" data-id="${t.id}" rows="2">${esc(t.desc?.th)}</textarea></div>
+      <div><label class="ef-l">Description (EN)</label><textarea class="ef-ta" data-f="desc.en" data-id="${t.id}" rows="2">${esc(t.desc?.en)}</textarea></div>
+    </div>
+    <label class="ef-l">Owners / roles</label>
+    <div class="ef-owners">${owners}</div>
+    <button class="ef-add" data-oadd="${t.id}">+ Add role</button>
+    <label class="ef-l">Schedule (Gantt bar)</label>
+    <div class="ef-sched">
+      <label class="ef-condl"><input type="checkbox" class="ef-cb" data-f="conditional" data-id="${t.id}" ${s.conditional ? 'checked' : ''}> as needed (no dates)</label>
+      <span>Start <input type="date" class="ef-date" data-f="start" data-id="${t.id}" value="${escAttr(s.start || '')}"></span>
+      <span>End <input type="date" class="ef-date" data-f="end" data-id="${t.id}" value="${escAttr(s.end || '')}"></span>
+      <span class="ef-wds">only: ${WD_ORDER.map(([n, lbl]) => `<label><input type="checkbox" class="ef-wd" data-id="${t.id}" value="${n}" ${wdSet.has(n) ? 'checked' : ''}>${lbl}</label>`).join('')}</span>
+    </div>
+    <div class="ef-2">
+      <div><label class="ef-l">Sub-points (one per line)</label><textarea class="ef-ta" data-f="lines" data-id="${t.id}" rows="3">${esc((t.lines || []).join('\n'))}</textarea></div>
+      <div><label class="ef-l">Remarks (one per line)</label><textarea class="ef-ta" data-f="remarks" data-id="${t.id}" rows="3">${esc((t.remarks || []).join('\n'))}</textarea></div>
+    </div>
+    <label class="ef-l">Detail groups</label>
+    <div class="ef-groups">${groups}</div>
+    <button class="ef-add" data-gadd="${t.id}">+ Add group</button>
+    <div class="ef-taskbar">
+      <button class="ef-btn" data-tup="${t.id}">↑ Up</button>
+      <button class="ef-btn" data-tdown="${t.id}">↓ Down</button>
+      <button class="ef-btn danger" data-tdel="${t.id}">🗑 Delete task</button>
+    </div>
+  </div>`;
 }
+
+function msProgress(m) { const done = m.tasks.filter((t) => byKey[t.status || 'NS']?.done).length; return { done, total: m.tasks.length, pct: m.tasks.length ? Math.round((done / m.tasks.length) * 100) : 0 }; }
 
 function matches(t) {
-  const q = $('#f-search').value.trim().toLowerCase();
-  const fs = $('#f-status').value, fo = $('#f-owner').value;
-  const hay = [t.title, ...(t.lines || []), ...Object.values(t.detail || {}).flat(), ...(t.remarks || []), ...ownerNames(t), noteOf(t.id)].join(' ').toLowerCase();
-  return (!q || hay.includes(q)) && (!fs || statusOf(t.id) === fs) && (!fo || ownerNames(t).includes(fo));
+  const q = $('#f-search').value.trim().toLowerCase(); const fs = $('#f-status').value, fo = $('#f-owner').value;
+  const hay = [t.title, t.desc?.th, t.desc?.en, ...(t.lines || []), ...Object.values(t.detail || {}).flat(), ...(t.remarks || []), ...ownerNames(t), t.note].join(' ').toLowerCase();
+  return (!q || hay.includes(q)) && (!fs || (t.status || 'NS') === fs) && (!fo || ownerNames(t).includes(fo));
+}
+
+function msHeadHTML(m) {
+  const p = msProgress(m); const isColl = collapsed.has(m.id);
+  if (editing) {
+    return `<div class="g-msrow editing" data-ms="${m.id}"><div class="g-mshead-edit">
+        <input class="ef-in ef-mno" data-mf="no" data-mid="${m.id}" value="${escAttr(m.no)}" title="No.">
+        <input class="ef-in ef-mname" data-mf="name" data-mid="${m.id}" value="${escAttr(m.name)}" placeholder="Milestone name">
+        <input class="ef-in ef-mphase" data-mf="phase" data-mid="${m.id}" value="${escAttr(m.phase)}" placeholder="Phase">
+        <button class="ef-btn" data-mup="${m.id}" title="Move up">↑</button>
+        <button class="ef-btn" data-mdown="${m.id}" title="Move down">↓</button>
+        <button class="ef-btn" data-taskadd="${m.id}">+ Task</button>
+        <button class="ef-btn danger" data-mdel="${m.id}" title="Delete milestone">🗑</button>
+      </div>
+      <div class="g-msdesc-edit">
+        <input class="ef-in" data-mf="desc.th" data-mid="${m.id}" value="${escAttr(m.desc?.th)}" placeholder="คำอธิบาย milestone (ไทย)">
+        <input class="ef-in" data-mf="desc.en" data-mid="${m.id}" value="${escAttr(m.desc?.en)}" placeholder="Milestone description (EN)">
+      </div></div>`;
+  }
+  return `<div class="g-msrow ${isColl ? 'collapsed' : ''}" data-ms="${m.id}"><div class="g-mshead" data-mstoggle="${m.id}">
+      <svg class="cw" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M6 9l6 6 6-6"/></svg>
+      <span class="mno">${esc(m.no)}</span><span class="mname">${esc(m.name)}</span><span class="mphase">${esc(m.phase || '')}</span>
+      <span class="mprog"><span class="mbar"><i style="width:${p.pct}%"></i></span>${p.done}/${p.total}</span></div></div>`;
 }
 
 function rebuildBoard() {
-  const wrap = $('#gantt-wrap');
-  const prevScroll = wrap ? wrap.scrollLeft : 0;
-  let html = headerHTML();
-  let anyVisible = false;
-
-  for (const m of MILESTONES) {
+  const wrap = $('#gantt-wrap'); const prevScroll = wrap ? wrap.scrollLeft : 0;
+  let html = headerHTML(); let anyVisible = false;
+  for (const m of BOARD) {
     const visTasks = m.tasks.filter(matches);
-    if (!visTasks.length) continue;
+    if (!visTasks.length && !editing) continue;
     anyVisible = true;
-    const p = msProgress(m);
-    const isColl = collapsed.has(m.id);
-    html += `<div class="g-msrow ${isColl ? 'collapsed' : ''}" data-ms="${m.id}">
-        <div class="g-mshead">
-          <svg class="cw" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M6 9l6 6 6-6"/></svg>
-          <span class="mno">${esc(m.no)}</span>
-          <span class="mname">${esc(m.name)}</span>
-          <span class="mphase">${esc(m.phase || '')}</span>
-          <span class="mprog"><span class="mbar"><i style="width:${p.pct}%"></i></span>${p.done}/${p.total}</span>
-        </div>
-      </div>`;
-    if (!isColl) html += visTasks.map(taskRowHTML).join('');
+    html += msHeadHTML(m);
+    if (!collapsed.has(m.id) || editing) html += (editing ? m.tasks : visTasks).map(taskRowHTML).join('');
   }
-
-  const inner = `<div class="gantt">${html}</div>`;
-  if (wrap) wrap.innerHTML = inner;
+  if (editing) html += `<div class="g-addms"><button class="ef-add big" id="add-ms">+ Add milestone</button></div>`;
+  if (wrap) wrap.innerHTML = `<div class="gantt">${html}</div>`;
   $('#empty').style.display = anyVisible ? 'none' : 'block';
   if (wrap) wrap.scrollLeft = prevScroll;
 }
+function refreshAll() { renderHero(); rebuildBoard(); renderGuide(); }
 
-/* light refresh (hero + progress) without full rebuild is folded into rebuild */
-function refreshAll() { renderHero(); rebuildBoard(); }
+/* ---------------- edit operations ---------------- */
+function setTaskField(id, path, val) { const f = findTask(id); if (!f) return; if (path === 'desc.th') f.t.desc.th = val; else if (path === 'desc.en') f.t.desc.en = val; else f.t[path] = val; commit(); }
+function setMsField(id, path, val) { const f = findMs(id); if (!f) return; if (path === 'desc.th') { f.m.desc = f.m.desc || {}; f.m.desc.th = val; } else if (path === 'desc.en') { f.m.desc = f.m.desc || {}; f.m.desc.en = val; } else f.m[path] = val; commit(); }
+function setSchedule(id, mut) { const f = findTask(id); if (!f) return; f.t.schedule = f.t.schedule || {}; mut(f.t.schedule); if (!f.t.schedule.start && !f.t.schedule.end && !f.t.schedule.conditional && !(f.t.schedule.weekdays || []).length) f.t.schedule = null; commit(); }
+function move(arr, i, dir) { const j = i + dir; if (j < 0 || j >= arr.length) return false; [arr[i], arr[j]] = [arr[j], arr[i]]; return true; }
 
-/* ---------------- interactions (event delegation) ---------------- */
+/* ---------------- interactions ---------------- */
 function wireBoard() {
   const wrap = $('#gantt-wrap');
+
   wrap.addEventListener('click', (e) => {
-    const cell = e.target.closest('.g-cell');
-    if (cell) { const id = cell.dataset.id, iso = cell.dataset.iso; setDay(id, iso, !isPainted(id, DAYS.find((d) => d.iso === iso))); rebuildBoard(); return; }
-    const title = e.target.closest('.g-title');
-    if (title) { const id = title.dataset.toggle; expanded.has(id) ? expanded.delete(id) : expanded.add(id); rebuildBoard(); return; }
-    const ms = e.target.closest('.g-mshead');
-    if (ms) { const id = ms.parentElement.dataset.ms; collapsed.has(id) ? collapsed.delete(id) : collapsed.add(id); rebuildBoard(); return; }
+    const b = (a) => e.target.closest(`[${a}]`);
+    let n;
+    if ((n = e.target.closest('.g-cell')) && !editing) { const id = n.dataset.cell, iso = n.dataset.iso; const f = findTask(id); const day = DAYS.find((d) => d.iso === iso); f.t.days[iso] = isPainted(f.t, day) ? 0 : 1; commit(); rebuildBoard(); return; }
+    if ((n = b('data-toggle'))) { const id = n.dataset.toggle; expanded.has(id) ? expanded.delete(id) : expanded.add(id); rebuildBoard(); return; }
+    if ((n = b('data-mstoggle'))) { const id = n.dataset.mstoggle; collapsed.has(id) ? collapsed.delete(id) : collapsed.add(id); rebuildBoard(); return; }
+    // edit ops
+    if ((n = b('data-oadd'))) { findTask(n.dataset.oadd).t.owners.push({ role: '', who: '' }); commit(); rebuildBoard(); return; }
+    if ((n = b('data-odel'))) { findTask(n.dataset.odel).t.owners.splice(+n.dataset.oidx, 1); commit(); rebuildBoard(); return; }
+    if ((n = b('data-gadd'))) { const t = findTask(n.dataset.gadd).t; t.detail = t.detail || {}; t.detail['New group ' + (Object.keys(t.detail).length + 1)] = []; commit(); rebuildBoard(); return; }
+    if ((n = b('data-gdel'))) { delete findTask(n.dataset.gdel).t.detail[n.dataset.gkey]; commit(); rebuildBoard(); return; }
+    if ((n = b('data-tup')) || (n = b('data-tdown'))) { const id = (n.dataset.tup || n.dataset.tdown); const dir = n.dataset.tup ? -1 : 1; const f = findTask(id); if (move(f.m.tasks, f.ti, dir)) { commit(); rebuildBoard(); } return; }
+    if ((n = b('data-tdel'))) { const f = findTask(n.dataset.tdel); if (confirm('Delete this task?')) { f.m.tasks.splice(f.ti, 1); commit(); refreshAll(); } return; }
+    if ((n = b('data-taskadd'))) { const f = findMs(n.dataset.taskadd); f.m.tasks.push({ id: uid('t-'), title: 'New task', desc: { th: '', en: '' }, owners: [], lines: [], detail: {}, remarks: [], schedule: null, status: 'NS', note: '', days: {} }); commit(); refreshAll(); return; }
+    if ((n = b('data-mup')) || (n = b('data-mdown'))) { const id = (n.dataset.mup || n.dataset.mdown); const dir = n.dataset.mup ? -1 : 1; const f = findMs(id); if (move(BOARD, f.mi, dir)) { commit(); rebuildBoard(); } return; }
+    if ((n = b('data-mdel'))) { const f = findMs(n.dataset.mdel); if (confirm(`Delete milestone "${f.m.name}" and its ${f.m.tasks.length} tasks?`)) { BOARD.splice(f.mi, 1); commit(); refreshAll(); } return; }
+    if (e.target.id === 'add-ms') { BOARD.push({ id: uid('m-'), no: String(BOARD.length), name: 'New milestone', phase: '', desc: { th: '', en: '' }, tasks: [] }); commit(); refreshAll(); return; }
   });
+
+  // live text edits — update model WITHOUT rebuilding (keep focus)
+  wrap.addEventListener('input', (e) => {
+    const n = e.target;
+    if (n.dataset.f && n.dataset.id) {
+      const id = n.dataset.id, f = n.dataset.f;
+      if (f === 'lines' || f === 'remarks') setTaskField(id, f, n.value.split('\n').map((x) => x.trim()).filter(Boolean));
+      else setTaskField(id, f, n.value);
+      if (f === 'title') { const row = wrap.querySelector(`.g-row[data-row="${CSS.escape(id)}"] .g-title span`); if (row) row.textContent = n.value; }
+      return;
+    }
+    if (n.dataset.mf && n.dataset.mid) { setMsField(n.dataset.mid, n.dataset.mf, n.value); return; }
+    if (n.classList.contains('ef-orole') || n.classList.contains('ef-oname')) { const f = findTask(n.dataset.oid); const o = f.t.owners[+n.dataset.oidx]; if (o) { if (n.classList.contains('ef-orole')) o.role = n.value; else o.who = n.value; commit(); } return; }
+    if (n.classList.contains('ef-gitems')) { findTask(n.dataset.gid).t.detail[n.dataset.gkey] = n.value.split('\n').map((x) => x.trim()).filter(Boolean); commit(); return; }
+    if (n.classList.contains('ef-note') || n.dataset.note) { findTask(n.dataset.note).t.note = n.value; commit(); return; }
+  });
+
   wrap.addEventListener('change', (e) => {
-    const sel = e.target.closest('.status-select');
-    if (sel) { setStatus(sel.dataset.id, sel.value); refreshAll(); toast(`Status → ${byKey[sel.value].label}`); return; }
-    const note = e.target.closest('.note-input');
-    if (note) { setNote(note.dataset.id, note.value.trim()); toast('Note saved'); }
+    const n = e.target;
+    if (n.dataset.status) { findTask(n.dataset.status).t.status = n.value; commit(); refreshAll(); toast(`Status → ${byKey[n.value].label}`); return; }
+    if (n.dataset.note !== undefined && n.classList.contains('note-input')) { findTask(n.dataset.note).t.note = n.value.trim(); commit(); toast('Note saved'); return; }
+    if (n.classList.contains('ef-gname')) { const t = findTask(n.dataset.gid).t; const old = n.dataset.gkey, val = n.value.trim() || 'group'; if (val !== old) { const items = t.detail[old]; delete t.detail[old]; t.detail[val] = items; commit(); rebuildBoard(); } return; }
+    if (n.dataset.f === 'start' || n.dataset.f === 'end') { setSchedule(n.dataset.id, (s) => { s[n.dataset.f] = n.value || undefined; }); rebuildBoard(); return; }
+    if (n.dataset.f === 'conditional') { setSchedule(n.dataset.id, (s) => { s.conditional = n.checked; }); rebuildBoard(); return; }
+    if (n.classList.contains('ef-wd')) { const id = n.dataset.id; setSchedule(id, (s) => { const set = new Set(s.weekdays || []); n.checked ? set.add(+n.value) : set.delete(+n.value); s.weekdays = set.size ? [...set].sort() : undefined; }); rebuildBoard(); return; }
   });
+}
+
+/* ---------------- Guide ---------------- */
+function renderGuide() {
+  const statusRows = STATUSES.filter((s) => s.key !== 'NS').map((s) => `<div class="gl-row"><span class="gl-code" style="background:${s.color}">${s.key}</span><span>${s.label}</span></div>`).join('');
+  const msCards = BOARD.map((m) => {
+    const tasks = m.tasks.map((t) => `<li><b>${esc(t.title)}</b>${t.desc && (t.desc.th || t.desc.en) ? `<div class="gt-desc"><span class="th">${esc(t.desc.th)}</span><span class="en">${esc(t.desc.en)}</span></div>` : ''}</li>`).join('');
+    return `<div class="guide-ms"><div class="guide-ms-head"><span class="mno">${esc(m.no)}</span><div><h3>${esc(m.name)}</h3><span class="phase">${esc(m.phase || '')}</span></div></div>
+      ${m.desc && (m.desc.th || m.desc.en) ? `<p class="th">${esc(m.desc.th)}</p><p class="en">${esc(m.desc.en)}</p>` : ''}
+      <ul class="guide-tasks">${tasks}</ul></div>`;
+  }).join('');
+  $('#view-guide').innerHTML = `<div class="guide">
+      <div class="guide-intro"><h2>${esc(PROJECT.title)} — ${esc(PROJECT.subtitle)}</h2>
+        <p class="th">โครงการเก็บเสียงพูดภาษาไทย เฟส 2 มีเป้าหมายส่งมอบ <b>500 คู่ที่ผ่านการตรวจ QC</b> โดยแบ่งงานเป็น ${BOARD.length} milestone ตั้งแต่การเปิดหาผู้เข้าร่วม → ทดลองนำร่อง → ส่งงานรายสัปดาห์ที่คงที่ → ขยายผล → ตรวจ QC และปิดโครงการ หน้านี้อธิบายว่าแต่ละช่วงคืออะไรและทำไปเพื่ออะไร</p>
+        <p class="en">Thai audio-collection project, Phase 2, delivering <b>500 QC-passed pairs</b> across ${BOARD.length} milestones — from acquisition launch → pilots → stable weekly delivery → scale → QC and closure. This page explains what each stage is and why it matters.</p></div>
+      <div class="guide-how"><h3>วิธีใช้ตาราง / How to use the tracker</h3><ul>
+        <li><span class="th">แต่ละงานตั้ง <b>สถานะ</b>ได้จากเมนูดรอปดาวน์ (สีของแถบจะเปลี่ยนตามสถานะ)</span><span class="en">Set each task's <b>status</b> from its dropdown — the bar takes the status colour.</span></li>
+        <li><span class="th"><b>คลิกช่องวัน</b>ในตารางเพื่อระบาย/ลบวันที่ทำงานเอง</span><span class="en"><b>Click a day cell</b> to paint/unpaint working days.</span></li>
+        <li><span class="th">กด <b>✏️ Edit</b> เพื่อเพิ่ม/ลบ/แก้ milestone และงาน เจ้าของ วันที่ และคำอธิบาย</span><span class="en">Hit <b>✏️ Edit</b> to add/remove/change milestones, tasks, owners, dates and descriptions.</span></li>
+        <li><span class="th">ข้อมูล<b>ซิงก์อัตโนมัติ</b>ทุกคนเมื่อเชื่อม Firebase (ดูสถานะมุมขวาบน)</span><span class="en">Data <b>syncs across everyone</b> when Firebase is connected.</span></li>
+      </ul><div class="guide-legend"><div class="gl-title">Status codes</div>${statusRows}</div></div>
+      <h3 class="guide-h">Milestones — อธิบายทีละช่วง</h3>${msCards}</div>`;
 }
 
 /* ---------------- toolbar ---------------- */
@@ -312,159 +385,78 @@ function wireToolbar() {
   $('#f-status').addEventListener('change', rebuildBoard);
   $('#f-owner').addEventListener('change', rebuildBoard);
   $('#expand-all').addEventListener('click', () => { collapsed.clear(); rebuildBoard(); });
-  $('#collapse-all').addEventListener('click', () => { MILESTONES.forEach((m) => collapsed.add(m.id)); rebuildBoard(); });
+  $('#collapse-all').addEventListener('click', () => { BOARD.forEach((m) => collapsed.add(m.id)); rebuildBoard(); });
+
+  $('#edit-toggle').addEventListener('click', () => {
+    editing = !editing;
+    document.body.classList.toggle('editing', editing);
+    $('#edit-toggle').classList.toggle('on', editing);
+    $('#edit-toggle').innerHTML = editing ? '✓ Done' : '✏️ Edit';
+    if (editing) { $('#f-status').value = ''; $('#f-owner').value = ''; $('#f-search').value = ''; }
+    rebuildBoard();
+    toast(editing ? 'Edit mode on — changes sync to everyone' : 'Edit mode off');
+  });
 
   $('#export').addEventListener('click', () => {
-    const blob = new Blob([JSON.stringify({ project: PROJECT.title, savedAt: new Date().toISOString(), state }, null, 2)], { type: 'application/json' });
-    const a = el('a'); a.href = URL.createObjectURL(blob); a.download = 'thaiaudio-p2-tracker.json'; a.click(); URL.revokeObjectURL(a.href); toast('Progress exported');
+    const blob = new Blob([JSON.stringify({ project: PROJECT.title, savedAt: new Date().toISOString(), board: BOARD }, null, 2)], { type: 'application/json' });
+    const a = el('a'); a.href = URL.createObjectURL(blob); a.download = 'thaiaudio-p2-tracker.json'; a.click(); URL.revokeObjectURL(a.href); toast('Board exported');
   });
   $('#import').addEventListener('click', () => $('#import-file').click());
   $('#import-file').addEventListener('change', (e) => {
-    const file = e.target.files[0]; if (!file) return;
-    const r = new FileReader();
-    r.onload = () => { try { const d = JSON.parse(r.result); state = d.state || d; saveLocal(); if (remote) remote.replace(state); refreshAll(); toast('Progress imported'); } catch { toast('Could not read that file'); } e.target.value = ''; };
+    const file = e.target.files[0]; if (!file) return; const r = new FileReader();
+    r.onload = () => { try { const d = JSON.parse(r.result); if (Array.isArray(d.board)) BOARD = d.board; else if (Array.isArray(d)) BOARD = d; else throw 0; saveLocal(); pushBoard(); refreshAll(); toast('Board imported'); } catch { toast('Could not read that file'); } e.target.value = ''; };
     r.readAsText(file);
   });
   $('#reset').addEventListener('click', () => {
-    if (!confirm('Reset all statuses, notes and painted days? This clears saved progress' + (remote ? ' for everyone on this board.' : ' in this browser.'))) return;
-    state = {}; saveLocal(); if (remote) remote.replace({}); refreshAll(); toast('Tracker reset');
+    if (!confirm('Reset the board back to the original plan? This discards all edits and progress' + (remote ? ' for everyone.' : '.'))) return;
+    BOARD = seedBoard(); saveLocal(); pushBoard(); refreshAll(); toast('Board reset to original');
   });
 
   const themeBtn = $('#theme');
-  const savedTheme = localStorage.getItem('tracker-theme');
-  if (savedTheme) document.documentElement.setAttribute('data-theme', savedTheme);
-  const paint = () => {
-    const dark = document.documentElement.getAttribute('data-theme') === 'dark' || (!document.documentElement.getAttribute('data-theme') && matchMedia('(prefers-color-scheme: dark)').matches);
-    themeBtn.textContent = dark ? '☀' : '☾';
-  };
+  const savedTheme = localStorage.getItem('tracker-theme'); if (savedTheme) document.documentElement.setAttribute('data-theme', savedTheme);
+  const paint = () => { const dark = document.documentElement.getAttribute('data-theme') === 'dark' || (!document.documentElement.getAttribute('data-theme') && matchMedia('(prefers-color-scheme: dark)').matches); themeBtn.textContent = dark ? '☀' : '☾'; };
   paint();
-  themeBtn.addEventListener('click', () => {
-    const next = document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
-    document.documentElement.setAttribute('data-theme', next); localStorage.setItem('tracker-theme', next); paint();
-  });
+  themeBtn.addEventListener('click', () => { const next = document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark'; document.documentElement.setAttribute('data-theme', next); localStorage.setItem('tracker-theme', next); paint(); });
 }
 
-/* ---------------- Firebase sync (optional) ---------------- */
+/* ---------------- tabs ---------------- */
+let currentView = 'tracker';
+function wireTabs() {
+  document.querySelectorAll('.tab').forEach((tab) => tab.addEventListener('click', () => {
+    const v = tab.dataset.view; if (v === currentView) return; currentView = v;
+    document.querySelectorAll('.tab').forEach((t) => t.classList.toggle('active', t === tab));
+    $('#view-tracker').hidden = v !== 'tracker'; $('#view-guide').hidden = v !== 'guide';
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }));
+}
+
+/* ---------------- Firebase sync ---------------- */
 let remote = null;
-function setSync(kind, extra) {
+function setSync(kind) {
   const b = $('#sync'); if (!b) return;
-  const map = {
-    local: ['◍', 'Saved locally', 'local'],
-    connecting: ['◌', 'Connecting…', 'connecting'],
-    synced: ['●', 'Live · synced', 'synced'],
-    error: ['▲', 'Sync error', 'error'],
-  };
-  const [dot, label, cls] = map[kind] || map.local;
-  b.className = 'sync ' + cls;
-  b.innerHTML = `<span class="sdot">${dot}</span>${label}${extra ? ` · ${extra}` : ''}`;
+  const map = { local: ['◍', 'Saved locally', 'local'], connecting: ['◌', 'Connecting…', 'connecting'], synced: ['●', 'Live · synced', 'synced'], error: ['▲', 'Sync error', 'error'] };
+  const [dot, label, cls] = map[kind] || map.local; b.className = 'sync ' + cls; b.innerHTML = `<span class="sdot">${dot}</span>${label}`;
 }
-function pushRemote(path, val) { if (remote) remote.update(path, val); }
-
 async function initRemote() {
   if (!FIREBASE_CONFIG || !FIREBASE_CONFIG.projectId) { setSync('local'); return; }
   setSync('connecting');
   try {
     const V = '10.12.5';
-    const [appMod, fs] = await Promise.all([
-      import(`https://www.gstatic.com/firebasejs/${V}/firebase-app.js`),
-      import(`https://www.gstatic.com/firebasejs/${V}/firebase-firestore.js`),
-    ]);
-    const app = appMod.initializeApp(FIREBASE_CONFIG);
-    const db = fs.getFirestore(app);
-    const ref = fs.doc(db, 'trackers', BOARD_ID);
-    await fs.setDoc(ref, { tasks: state || {}, updatedAt: fs.serverTimestamp() }, { merge: true });
-    remote = {
-      update: (path, val) => fs.updateDoc(ref, { [path]: val, updatedAt: fs.serverTimestamp() }).catch((e) => { console.warn(e); setSync('error'); }),
-      replace: (obj) => fs.setDoc(ref, { tasks: obj, updatedAt: fs.serverTimestamp() }).catch((e) => console.warn(e)),
-    };
-    fs.onSnapshot(ref, (snap) => {
-      const d = snap.data();
-      if (d && d.tasks) { state = d.tasks; saveLocal(); refreshAll(); }
+    const [appMod, fs] = await Promise.all([import(`https://www.gstatic.com/firebasejs/${V}/firebase-app.js`), import(`https://www.gstatic.com/firebasejs/${V}/firebase-firestore.js`)]);
+    const app = appMod.initializeApp(FIREBASE_CONFIG); const db = fs.getFirestore(app); const ref = fs.doc(db, 'trackers', BOARD_ID);
+    remote = { replaceBoard: (board) => fs.setDoc(ref, { board, updatedAt: fs.serverTimestamp() }, { merge: true }).catch((e) => { console.warn(e); setSync('error'); }) };
+    const snap = await fs.getDoc(ref); const d0 = snap.data();
+    if (!d0 || (!Array.isArray(d0.board) && !d0.tasks)) { pushBoard(); } // seed empty doc with our board
+    fs.onSnapshot(ref, (s) => {
+      const d = s.data(); if (!d) return;
+      if (Array.isArray(d.board)) { const json = JSON.stringify(d.board); if (json !== lastPushed) { BOARD = d.board; saveLocal(); if (!editing) refreshAll(); } }
+      else if (d.tasks) { applyLegacy(BOARD, d.tasks); saveLocal(); pushBoard(); refreshAll(); }
       setSync('synced');
-    }, (err) => { console.warn('Firestore listen failed', err); setSync('error'); });
-  } catch (e) {
-    console.warn('Firebase unavailable — local mode.', e);
-    setSync('local');
-  }
-}
-
-/* ---------------- Guide tab ---------------- */
-function renderGuide() {
-  const statusRows = STATUSES.filter((s) => s.key !== 'NS').map((s) =>
-    `<div class="gl-row"><span class="gl-code" style="background:${s.color}">${s.key}</span><span>${s.label}</span></div>`).join('');
-
-  const msCards = MILESTONES.map((m) => {
-    const d = DESCRIPTIONS[m.id];
-    const tasks = m.tasks.map((t) => {
-      const td = DESCRIPTIONS[t.id];
-      return `<li><b>${esc(t.title)}</b>${td ? `<div class="gt-desc"><span class="th">${esc(td.th)}</span><span class="en">${esc(td.en)}</span></div>` : ''}</li>`;
-    }).join('');
-    return `<div class="guide-ms">
-      <div class="guide-ms-head"><span class="mno">${esc(m.no)}</span>
-        <div><h3>${esc(m.name)}</h3><span class="phase">${esc(m.phase || '')}</span></div></div>
-      ${d ? `<p class="th">${esc(d.th)}</p><p class="en">${esc(d.en)}</p>` : ''}
-      <ul class="guide-tasks">${tasks}</ul>
-    </div>`;
-  }).join('');
-
-  $('#view-guide').innerHTML = `
-    <div class="guide">
-      <div class="guide-intro">
-        <h2>${esc(PROJECT.title)} — ${esc(PROJECT.subtitle)}</h2>
-        <p class="th">โครงการเก็บเสียงพูดภาษาไทย เฟส 2 มีเป้าหมายส่งมอบ <b>500 คู่ที่ผ่านการตรวจ QC</b> โดยแบ่งงานเป็น
-          11 milestone ตั้งแต่การเปิดหาผู้เข้าร่วม → ทดลองนำร่อง → ส่งงานรายสัปดาห์ที่คงที่ → ขยายผล → ตรวจ QC และปิดโครงการ
-          หน้านี้อธิบายว่าแต่ละช่วงคืออะไรและทำไปเพื่ออะไร</p>
-        <p class="en">Thai audio-collection project, Phase 2, delivering <b>500 QC-passed pairs</b> across 11 milestones —
-          from acquisition launch → pilots → stable weekly delivery → scale → QC and closure. This page explains what
-          each stage is and why it matters.</p>
-      </div>
-
-      <div class="guide-how">
-        <h3>วิธีใช้ตาราง / How to use the tracker</h3>
-        <ul>
-          <li><span class="th">แต่ละงานตั้ง <b>สถานะ</b>ได้จากเมนูดรอปดาวน์ (สีของแถบจะเปลี่ยนตามสถานะ)</span>
-              <span class="en">Set each task's <b>status</b> from its dropdown — the bar takes the status colour.</span></li>
-          <li><span class="th"><b>คลิกช่องวัน</b>ในตารางเพื่อระบาย/ลบวันที่ทำงานเอง (เหมือนกรอกเซลล์ใน Excel)</span>
-              <span class="en"><b>Click a day cell</b> to paint/unpaint working days, just like the spreadsheet.</span></li>
-          <li><span class="th">คลิก<b>ชื่องาน</b>เพื่อกางดูรายละเอียด เจ้าของงาน และคำอธิบาย</span>
-              <span class="en">Click a <b>task title</b> to expand its details, owners, and description.</span></li>
-          <li><span class="th">ข้อมูล<b>ซิงก์อัตโนมัติ</b>ทุกคนเมื่อเชื่อม Firebase (ดูสถานะมุมขวาบน)</span>
-              <span class="en">Data <b>syncs across everyone</b> when Firebase is connected (see the badge, top-right).</span></li>
-        </ul>
-        <div class="guide-legend"><div class="gl-title">Status codes</div>${statusRows}</div>
-      </div>
-
-      <h3 class="guide-h">Milestones — อธิบายทีละช่วง</h3>
-      ${msCards}
-    </div>`;
-}
-
-let currentView = 'tracker';
-function wireTabs() {
-  document.querySelectorAll('.tab').forEach((tab) => {
-    tab.addEventListener('click', () => {
-      const v = tab.dataset.view;
-      if (v === currentView) return;
-      currentView = v;
-      document.querySelectorAll('.tab').forEach((t) => t.classList.toggle('active', t === tab));
-      $('#view-tracker').hidden = v !== 'tracker';
-      $('#view-guide').hidden = v !== 'guide';
-      window.scrollTo({ top: 0, behavior: 'smooth' });
-    });
-  });
+    }, (err) => { console.warn('listen failed', err); setSync('error'); });
+  } catch (e) { console.warn('Firebase unavailable — local mode.', e); setSync('local'); }
 }
 
 /* ---------------- boot ---------------- */
-renderHeader();
-renderLegend();
-renderFilters();
-renderGuide();
-wireTabs();
-// persistent scroll container
-$('#board').innerHTML = '<div class="gantt-wrap" id="gantt-wrap"></div>';
-renderHero();
-rebuildBoard();
-wireBoard();
-wireToolbar();
-setSync('local');
-initRemote();
+renderHeader(); renderLegend(); renderFilters(); renderGuide(); wireTabs();
+$('#board').innerHTML = '<div class="gantt-wrap" id="gantt-wrap"></div><datalist id="rolelist"><option value="POC1"><option value="POC2"><option value="Management"><option value="Ops"><option value="TA"></datalist>';
+renderHero(); rebuildBoard(); wireBoard(); wireToolbar(); setSync('local'); initRemote();
