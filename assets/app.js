@@ -74,7 +74,20 @@ function ensureSubtasks(board) {
       t.subtasks = t.lines.map((l, i) => ({ id: `${t.id}::s${i}`, title: l, status: 'NS', note: '', days: {} }));
     }
     if (!Array.isArray(t.subtasks)) t.subtasks = [];
-    delete t.lines;
+    // Fold the old detail checklist groups (OPS/Management/TA…) into grouped
+    // sub-tasks — once — so every item is trackable per day. Dedupe by title.
+    if (t.detail && Object.keys(t.detail).length) {
+      const have = new Set(t.subtasks.map((s) => (s.title || '').trim().toLowerCase()));
+      Object.entries(t.detail).forEach(([g, items], gi) => {
+        (items || []).forEach((it, i) => {
+          const key = (it || '').trim().toLowerCase();
+          if (!key || have.has(key)) return;
+          have.add(key);
+          t.subtasks.push({ id: `${t.id}::g${gi}-${i}`, title: it, group: g, status: 'NS', note: '', days: {} });
+        });
+      });
+    }
+    delete t.lines; delete t.detail;
   }
   return board;
 }
@@ -199,11 +212,14 @@ function parentStatus(t) {
   for (const s of subs) { const k = s.status || 'NS'; if (k !== 'TC') allTC = false; if (k !== 'NS' && k !== 'CA') anyLive = true; }
   return allTC ? 'TC' : (anyLive ? 'IP' : 'NS');
 }
-// …and each day: a union of its sub-tasks' days (all done → TC, else in-progress).
+// …and each day: a union of its sub-tasks' days. All sub-tasks the same status
+// that day → show it (all WD → WD, all TC → TC); a mix → in-progress.
 function parentDayStatus(t, day) {
-  let any = false, allTC = true;
-  for (const s of (t.subtasks || [])) { const st = dayStatusOfNode(s, t, day); if (st != null) { any = true; if (st !== 'TC') allTC = false; } }
-  return any ? (allTC ? 'TC' : 'IP') : null;
+  const set = new Set();
+  for (const s of (t.subtasks || [])) { const st = dayStatusOfNode(s, t, day); if (st != null) set.add(st); }
+  if (!set.size) return null;
+  if (set.size === 1) return [...set][0];
+  return 'IP';
 }
 
 /* ---------------- board render ---------------- */
@@ -259,10 +275,23 @@ function taskRowHTML(t) {
       </div>${hasSub ? cellsRollupHTML(t) : cellsHTML(t, t)}
     </div>`;
   if (isExp) {
-    if (hasSub) html += t.subtasks.map((s) => subRowHTML(s, t)).join('');
+    if (hasSub) html += subRowsHTML(t);
     html += `<div class="g-detail" data-detail="${t.id}"><div class="g-detail-in">${editing ? taskEditHTML(t) : taskReadHTML(t)}</div></div>`;
   }
   return html;
+}
+
+// Render a parent's sub-tasks, grouped by their `group` (ungrouped first,
+// then a small header per group — TA / Management / OPS, etc.).
+function subRowsHTML(parent) {
+  const order = []; const map = new Map();
+  for (const s of (parent.subtasks || [])) { const g = s.group || ''; if (!map.has(g)) { map.set(g, []); order.push(g); } map.get(g).push(s); }
+  let out = '';
+  for (const g of order) {
+    if (g) out += `<div class="g-row subgroup"><div class="g-info subgroup-info">${esc(g)}</div>${DAYS.map((d) => `<div class="g-cell blank ${d.isWeekend ? 'wknd' : ''} ${d.isToday ? 'today' : ''}"></div>`).join('')}</div>`;
+    out += map.get(g).map((s) => subRowHTML(s, parent)).join('');
+  }
+  return out;
 }
 
 function subRowHTML(s, parent) {
@@ -282,7 +311,6 @@ function subRowHTML(s, parent) {
 
 function taskReadHTML(t) {
   let inner = t.desc && (t.desc.th || t.desc.en) ? `<div class="desc-block"><p class="th">${esc(t.desc.th)}</p><p class="en">${esc(t.desc.en)}</p></div>` : '';
-  if (t.detail && Object.keys(t.detail).length) inner += `<div class="detail-groups">` + Object.entries(t.detail).map(([g, items]) => `<div class="detail-group"><div class="gh">${esc(g)}</div><ul>${items.map((i) => `<li>${esc(i)}</li>`).join('')}</ul></div>`).join('') + `</div>`;
   if (t.remarks?.length) inner += `<div class="remarks"><div class="rh">Remarks</div><ul>${t.remarks.map((r) => `<li>${esc(r)}</li>`).join('')}</ul></div>`;
   inner += `<div class="note-row"><span class="ni">✎</span><input class="note-input" data-note="${t.id}" type="text" placeholder="Add a note or update…" value="${escAttr(t.note)}"></div>`;
   return inner;
@@ -303,11 +331,8 @@ function taskEditHTML(t) {
       <input class="ef-in ef-oname" data-oid="${t.id}" data-oidx="${i}" placeholder="Name" value="${escAttr(o.who)}">
       <button class="ef-x" data-odel="${t.id}" data-oidx="${i}" title="Remove owner">✕</button></div>`;
   }).join('');
-  const groups = Object.entries(t.detail || {}).map(([g, items]) => `<div class="ef-group">
-      <input class="ef-in ef-gname" data-gid="${t.id}" data-gkey="${escAttr(g)}" value="${escAttr(g)}" placeholder="Group name">
-      <button class="ef-x" data-gdel="${t.id}" data-gkey="${escAttr(g)}" title="Remove group">✕</button>
-      <textarea class="ef-ta ef-gitems" data-gid="${t.id}" data-gkey="${escAttr(g)}" rows="3" placeholder="One item per line">${esc((items || []).join('\n'))}</textarea></div>`).join('');
   const subs = (t.subtasks || []).map((s, i) => `<div class="ef-owner">
+      <input class="ef-in ef-sgroup" data-stid="${t.id}" data-sidx="${i}" list="grouplist" placeholder="Group" value="${escAttr(s.group || '')}">
       <input class="ef-in ef-stitle" data-stid="${t.id}" data-sidx="${i}" value="${escAttr(s.title)}" placeholder="Sub-task">
       <button class="ef-x" data-sdel="${t.id}" data-sidx="${i}" title="Remove sub-task">✕</button></div>`).join('');
   return `<div class="ef">
@@ -327,14 +352,11 @@ function taskEditHTML(t) {
       <span>End <input type="date" class="ef-date" data-f="end" data-id="${t.id}" value="${escAttr(s.end || '')}"></span>
       <span class="ef-wds">only: ${WD_ORDER.map(([n, lbl]) => `<label><input type="checkbox" class="ef-wd" data-id="${t.id}" value="${n}" ${wdSet.has(n) ? 'checked' : ''}>${lbl}</label>`).join('')}</span>
     </div>
-    <label class="ef-l">Sub-tasks (each gets its own day-row; the parent rolls them up)</label>
+    <label class="ef-l">Sub-tasks (group + title — each gets its own day-row; the parent rolls them up)</label>
     <div class="ef-subs">${subs}</div>
     <button class="ef-add" data-sadd="${t.id}">+ Add sub-task</button>
     <label class="ef-l">Remarks (one per line)</label>
     <textarea class="ef-ta" data-f="remarks" data-id="${t.id}" rows="2">${esc((t.remarks || []).join('\n'))}</textarea>
-    <label class="ef-l">Detail groups</label>
-    <div class="ef-groups">${groups}</div>
-    <button class="ef-add" data-gadd="${t.id}">+ Add group</button>
     <div class="ef-taskbar">
       <button class="ef-btn" data-tup="${t.id}">↑ Up</button>
       <button class="ef-btn" data-tdown="${t.id}">↓ Down</button>
@@ -479,6 +501,7 @@ function wireBoard() {
   wrap.addEventListener('change', (e) => {
     const n = e.target;
     if (n.classList.contains('ef-orole')) { const f = findTask(n.dataset.oid); const o = f.t.owners[+n.dataset.oidx]; if (o) { o.role = n.value; commit(); rebuildBoard(); } return; }
+    if (n.classList.contains('ef-sgroup')) { const t = findTask(n.dataset.stid).t; const s = t.subtasks[+n.dataset.sidx]; if (s) { s.group = n.value.trim(); commit(); rebuildBoard(); } return; }
     if (n.dataset.substatus) { const f = findAny(n.dataset.substatus); if (f) { f.node.status = n.value; commit(); refreshAll(); toast(`Status → ${byKey[n.value].label}`); } return; }
     if (n.dataset.status) { findTask(n.dataset.status).t.status = n.value; commit(); refreshAll(); toast(`Status → ${byKey[n.value].label}`); return; }
     if (n.dataset.note !== undefined && n.classList.contains('note-input')) { findTask(n.dataset.note).t.note = n.value.trim(); commit(); toast('Note saved'); return; }
@@ -591,5 +614,5 @@ async function initRemote() {
 
 /* ---------------- boot ---------------- */
 renderHeader(); renderLegend(); renderFilters(); renderGuide(); wireTabs();
-$('#board').innerHTML = '<div class="gantt-wrap" id="gantt-wrap"></div><datalist id="rolelist"><option value="POC1"><option value="POC2"><option value="Management"><option value="Ops"><option value="TA"></datalist>';
+$('#board').innerHTML = '<div class="gantt-wrap" id="gantt-wrap"></div><datalist id="rolelist"><option value="POC1"><option value="POC2"><option value="Management"><option value="Ops"><option value="TA"></datalist><datalist id="grouplist"><option value="Management"><option value="Ops"><option value="TA"></datalist>';
 renderHero(); rebuildBoard(); wireBoard(); wireToolbar(); setSync('local'); initRemote();

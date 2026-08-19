@@ -555,6 +555,13 @@ body.editing .g-row .g-title { cursor: default; }
 .g-row.sub .sub-title { font-size: .8rem; color: var(--text-soft); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
 .g-row.sub.done .sub-title { color: var(--text-mut); text-decoration: line-through; }
 .status-select.mini { max-width: 60px; padding: 3px 5px; font-size: .66rem; flex: 0 0 auto; }
+.g-row.subgroup { border-bottom: 0; }
+.g-row.subgroup .subgroup-info { padding: 6px 10px 2px 22px; background: var(--surface); }
+.subgroup-info { font-size: .64rem; font-weight: 800; letter-spacing: .07em; text-transform: uppercase; color: var(--accent); }
+.g-cell.blank { cursor: default; }
+.g-cell.blank:hover { background: inherit; }
+.g-cell.blank.wknd { background: var(--wknd); }
+.ef-sgroup { flex: 0 0 108px; }
 .g-cell.rollup { cursor: default; }
 .g-cell.rollup:hover { background: inherit; }
 .g-cell.rollup.wknd:hover { background: var(--wknd); }
