@@ -140,7 +140,7 @@ const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, (c) => ({ '&': 
 const escAttr = (s) => esc(s).replace(/'/g, '&#39;');
 
 let toastTimer;
-const toast = (msg) => { let t = $('.toast'); if (!t) { t = el('div', 'toast'); document.body.appendChild(t); } t.textContent = msg; t.classList.add('show'); clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove('show'), 1800); };
+const toast = (msg) => { let t = $('.toast'); if (!t) { t = el('div', 'toast'); ($('#board') || document.body).appendChild(t); } t.textContent = msg; t.classList.add('show'); clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove('show'), 1800); };
 
 const statusColor = (t) => byKey[t.status || 'NS'].color;
 const ownerNames = (t) => (t.owners || []).map((o) => o.who);
@@ -465,7 +465,7 @@ function openDayMenu(cell, id, iso) {
   dayMenu.innerHTML = `<div class="dm-h"><b>${esc(node.title).slice(0, 34)}</b><span>${MONTHS[d.getMonth()]} ${d.getDate()} · ${['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][d.getDay()]}</span></div>
     <div class="dm-grid">${STATUSES.filter((s) => s.key !== 'NS').map((s) => `<button class="dm-b ${cur === s.key ? 'sel' : ''}" data-set="${s.key}"><span class="sw" style="background:${s.color}"></span><b>${s.key}</b> ${s.label}</button>`).join('')}</div>
     <button class="dm-clear" data-set="__clear">✕ Clear this day</button>`;
-  document.body.appendChild(dayMenu);
+  ($('#board') || document.body).appendChild(dayMenu);
   const r = cell.getBoundingClientRect();
   const w = dayMenu.offsetWidth || 240, h = dayMenu.offsetHeight || 300;
   let left = Math.min(Math.max(8, r.left), window.innerWidth - w - 8);
@@ -592,6 +592,19 @@ function wireToolbar() {
   $('#expand-all').addEventListener('click', () => { collapsed.clear(); rebuildBoard(); });
   $('#collapse-all').addEventListener('click', () => { BOARD.forEach((m) => collapsed.add(m.id)); rebuildBoard(); });
 
+  // Full-screen the timeline (CSS overlay + the real Fullscreen API when allowed).
+  function setFullscreen(on) {
+    document.body.classList.toggle('board-max', on);
+    $('#fs-toggle').classList.toggle('on', on);
+    if (on) { const b = $('#board'); if (b.requestFullscreen) b.requestFullscreen().catch(() => {}); }
+    else if (document.fullscreenElement) { document.exitFullscreen().catch(() => {}); }
+    setTimeout(() => $('#gantt-wrap').querySelectorAll('.sub-title-input').forEach(autoGrow), 60);
+  }
+  $('#fs-toggle').addEventListener('click', () => setFullscreen(!document.body.classList.contains('board-max')));
+  $('#fs-exit').addEventListener('click', () => setFullscreen(false));
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !dayMenu && document.body.classList.contains('board-max')) setFullscreen(false); });
+  document.addEventListener('fullscreenchange', () => { if (!document.fullscreenElement) { document.body.classList.remove('board-max'); $('#fs-toggle').classList.remove('on'); } });
+
   $('#edit-toggle').addEventListener('click', () => {
     editing = !editing;
     document.body.classList.toggle('editing', editing);
@@ -665,5 +678,5 @@ async function initRemote() {
 /* ---------------- boot ---------------- */
 const savedInfoW = localStorage.getItem('tracker-info-w'); if (savedInfoW) document.documentElement.style.setProperty('--g-info', savedInfoW);
 renderHeader(); renderLegend(); renderFilters(); renderGuide(); wireTabs();
-$('#board').innerHTML = '<div class="gantt-wrap" id="gantt-wrap"></div><datalist id="rolelist"><option value="POC1"><option value="POC2"><option value="Management"><option value="Ops"><option value="TA"></datalist><datalist id="grouplist"><option value="Management"><option value="Ops"><option value="TA"></datalist>';
+$('#board').innerHTML = '<div class="fs-bar"><span class="t">⛶ ' + esc(PROJECT.title) + ' · Timeline</span><button class="btn" id="fs-exit">✕ Exit full screen (Esc)</button></div><div class="gantt-wrap" id="gantt-wrap"></div><datalist id="rolelist"><option value="POC1"><option value="POC2"><option value="Management"><option value="Ops"><option value="TA"></datalist><datalist id="grouplist"><option value="Management"><option value="Ops"><option value="TA"></datalist>';
 renderHero(); rebuildBoard(); wireBoard(); wireToolbar(); setSync('local'); initRemote();

@@ -421,6 +421,15 @@ body.editing .g-row .g-title { cursor: default; }
 .sync.error   { color: #ef4444; border-color: color-mix(in srgb, #ef4444 40%, var(--border)); }
 @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .3; } }
 
+/* ================= Full-screen board ================= */
+#fs-toggle.on { background: var(--brand); color: #fff; border-color: var(--brand); }
+.fs-bar { display: none; }
+body.board-max { overflow: hidden; }
+body.board-max #board { position: fixed; inset: 0; z-index: 200; background: var(--bg); padding: 12px 16px 16px; display: flex; flex-direction: column; }
+body.board-max #board .fs-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 2px 2px 12px; }
+body.board-max #board .fs-bar .t { font-weight: 750; font-size: .95rem; color: var(--text); }
+body.board-max #gantt-wrap { max-height: none; flex: 1; }
+
 /* ================= Gantt board ================= */
 :root { --g-info: 264px; --g-col: 34px; }
 
