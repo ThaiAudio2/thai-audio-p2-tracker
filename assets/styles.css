@@ -554,6 +554,17 @@ body.board-max #gantt-wrap { max-height: none; flex: 1; }
 .dm-b b { font-weight: 800; }
 .dm-clear { width: 100%; margin-top: 6px; padding: 7px; border: 1px solid var(--border); background: var(--surface); color: var(--text-mut); border-radius: 8px; font: inherit; font-size: .78rem; font-weight: 600; cursor: pointer; }
 .dm-clear:hover { border-color: #ef4444; color: #ef4444; }
+.dm-note-wrap { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--border); }
+.dm-note-l { display: block; font-size: .68rem; font-weight: 700; color: var(--text-mut); margin-bottom: 4px; }
+.dm-note { width: 100%; font: inherit; font-family: inherit; font-size: .8rem; color: var(--text); background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px; padding: 6px 8px; resize: vertical; }
+.dm-note:focus { outline: none; border-color: var(--brand); background: var(--surface); }
+
+/* note marker on a day cell */
+.g-cell.noted::before { content: ''; position: absolute; top: 1px; right: 1px; z-index: 2; border-top: 7px solid var(--accent); border-left: 7px solid transparent; }
+
+/* Save button */
+#save-btn { color: var(--brand); border-color: color-mix(in srgb, var(--brand) 40%, var(--border)); font-weight: 700; }
+#save-btn:hover { border-color: var(--brand); background: color-mix(in srgb, var(--brand) 8%, transparent); }
 
 /* parent task + sub-tasks */
 .g-row.parent .g-info { background: color-mix(in srgb, var(--brand) 4%, var(--surface)); }

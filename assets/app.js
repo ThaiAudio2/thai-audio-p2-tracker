@@ -106,6 +106,12 @@ function loadLocal() {
   try { const legacy = JSON.parse(localStorage.getItem(LEGACY_KEY)); applyLegacy(board, legacy); } catch {}
   return board;
 }
+// True while the user is typing in an editable field on the board (used to
+// defer live-sync rebuilds so they don't steal focus / revert the text).
+function isEditingField() {
+  const a = document.activeElement;
+  return !!(a && (a.tagName === 'INPUT' || a.tagName === 'TEXTAREA') && a.closest && a.closest('#board'));
+}
 // find a task or sub-task by id; parentTask is set when it's a sub-task.
 function findAny(id) {
   const ft = findTask(id); if (ft) return { node: ft.t, parentTask: null };
@@ -242,8 +248,9 @@ function cellsHTML(node, schedOwner) {
   return DAYS.map((d, i) => {
     const st = at[i]; const on = st != null;
     const prev = i > 0 && at[i - 1] != null, next = i < DAYS.length - 1 && at[i + 1] != null;
-    const cls = ['g-cell', d.isWeekend ? 'wknd' : '', d.isToday ? 'today' : '', on ? 'on' : '', on && !prev ? 'st' : '', on && !next ? 'en' : ''].filter(Boolean).join(' ');
-    return `<div class="${cls}" data-cell="${node.id}" data-iso="${d.iso}" ${on ? `style="--c:${byKey[st].color}"` : ''}>${on ? `<span class="cc">${st}</span>` : ''}</div>`;
+    const note = node.dayNotes?.[d.iso];
+    const cls = ['g-cell', d.isWeekend ? 'wknd' : '', d.isToday ? 'today' : '', on ? 'on' : '', on && !prev ? 'st' : '', on && !next ? 'en' : '', note ? 'noted' : ''].filter(Boolean).join(' ');
+    return `<div class="${cls}" data-cell="${node.id}" data-iso="${d.iso}" ${note ? `title="📝 ${escAttr(note)}"` : ''} ${on ? `style="--c:${byKey[st].color}"` : ''}>${on ? `<span class="cc">${st}</span>` : ''}</div>`;
   }).join('');
 }
 // A parent day: a manual per-day override wins; else if the parent's status is
@@ -260,8 +267,9 @@ function cellsParentHTML(t) {
   return DAYS.map((d, i) => {
     const st = at[i]; const on = st != null;
     const prev = i > 0 && at[i - 1] != null, next = i < DAYS.length - 1 && at[i + 1] != null;
-    const cls = ['g-cell', d.isWeekend ? 'wknd' : '', d.isToday ? 'today' : '', on ? 'on' : '', on && !prev ? 'st' : '', on && !next ? 'en' : ''].filter(Boolean).join(' ');
-    return `<div class="${cls}" data-cell="${t.id}" data-iso="${d.iso}" ${on ? `style="--c:${byKey[st].color}"` : ''}>${on ? `<span class="cc">${st}</span>` : ''}</div>`;
+    const note = t.dayNotes?.[d.iso];
+    const cls = ['g-cell', d.isWeekend ? 'wknd' : '', d.isToday ? 'today' : '', on ? 'on' : '', on && !prev ? 'st' : '', on && !next ? 'en' : '', note ? 'noted' : ''].filter(Boolean).join(' ');
+    return `<div class="${cls}" data-cell="${t.id}" data-iso="${d.iso}" ${note ? `title="📝 ${escAttr(note)}"` : ''} ${on ? `style="--c:${byKey[st].color}"` : ''}>${on ? `<span class="cc">${st}</span>` : ''}</div>`;
   }).join('');
 }
 
@@ -450,8 +458,8 @@ function setSchedule(id, mut) { const f = findTask(id); if (!f) return; f.t.sche
 function move(arr, i, dir) { const j = i + dir; if (j < 0 || j >= arr.length) return false; [arr[i], arr[j]] = [arr[j], arr[i]]; return true; }
 
 /* ---------------- day status picker ---------------- */
-let dayMenu = null;
-function closeDayMenu() { if (dayMenu) { dayMenu.remove(); dayMenu = null; document.removeEventListener('click', outsideDayMenu, true); document.removeEventListener('keydown', escDayMenu); } }
+let dayMenu = null, dayMenuDirty = false;
+function closeDayMenu() { if (dayMenu) { dayMenu.remove(); dayMenu = null; document.removeEventListener('click', outsideDayMenu, true); document.removeEventListener('keydown', escDayMenu); if (dayMenuDirty) { dayMenuDirty = false; rebuildBoard(); } } }
 function outsideDayMenu(e) { if (dayMenu && !dayMenu.contains(e.target)) closeDayMenu(); }
 function escDayMenu(e) { if (e.key === 'Escape') closeDayMenu(); }
 function openDayMenu(cell, id, iso) {
@@ -464,7 +472,8 @@ function openDayMenu(cell, id, iso) {
   dayMenu = el('div', 'daymenu');
   dayMenu.innerHTML = `<div class="dm-h"><b>${esc(node.title).slice(0, 34)}</b><span>${MONTHS[d.getMonth()]} ${d.getDate()} · ${['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][d.getDay()]}</span></div>
     <div class="dm-grid">${STATUSES.filter((s) => s.key !== 'NS').map((s) => `<button class="dm-b ${cur === s.key ? 'sel' : ''}" data-set="${s.key}"><span class="sw" style="background:${s.color}"></span><b>${s.key}</b> ${s.label}</button>`).join('')}</div>
-    <button class="dm-clear" data-set="__clear">✕ Clear this day</button>`;
+    <button class="dm-clear" data-set="__clear">✕ Clear this day</button>
+    <div class="dm-note-wrap"><label class="dm-note-l">📝 Note for this day</label><textarea class="dm-note" rows="2" placeholder="Add a note for ${MONTHS[d.getMonth()]} ${d.getDate()}…">${esc(node.dayNotes?.[iso] || '')}</textarea></div>`;
   ($('#board') || document.body).appendChild(dayMenu);
   const r = cell.getBoundingClientRect();
   const w = dayMenu.offsetWidth || 240, h = dayMenu.offsetHeight || 300;
@@ -476,7 +485,13 @@ function openDayMenu(cell, id, iso) {
     const v = btn.dataset.set;
     node.days = node.days || {};
     if (v === '__clear') node.days[iso] = 0; else node.days[iso] = v;
-    commit(); rebuildBoard(); closeDayMenu();
+    dayMenuDirty = false; commit(); rebuildBoard(); closeDayMenu();
+  });
+  dayMenu.querySelector('.dm-note').addEventListener('input', (e) => {
+    node.dayNotes = node.dayNotes || {};
+    const val = e.target.value;
+    if (val.trim()) node.dayNotes[iso] = val; else delete node.dayNotes[iso];
+    dayMenuDirty = true; commit();
   });
   setTimeout(() => { document.addEventListener('click', outsideDayMenu, true); document.addEventListener('keydown', escDayMenu); }, 0);
 }
@@ -589,6 +604,14 @@ function wireToolbar() {
   $('#f-search').addEventListener('input', rebuildBoard);
   $('#f-status').addEventListener('change', rebuildBoard);
   $('#f-owner').addEventListener('change', rebuildBoard);
+
+  // Explicit Save: commit the field being edited, then flush to everyone now.
+  $('#save-btn').addEventListener('click', () => {
+    if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
+    saveLocal();
+    if (remote) { clearTimeout(remotePushTimer); pushBoard(); toast('Saved · synced to everyone'); }
+    else toast('Saved in this browser');
+  });
   $('#expand-all').addEventListener('click', () => { collapsed.clear(); rebuildBoard(); });
   $('#collapse-all').addEventListener('click', () => { BOARD.forEach((m) => collapsed.add(m.id)); rebuildBoard(); });
 
@@ -668,9 +691,12 @@ async function initRemote() {
     else if (Array.isArray(d0.board)) { const before = JSON.stringify(d0.board); const b = ensureSubtasks(d0.board); BOARD = b; saveLocal(); if (JSON.stringify(b) !== before) pushBoard(); refreshAll(); } // migrate old board (lines → sub-tasks)
     fs.onSnapshot(ref, (s) => {
       const d = s.data(); if (!d) return;
+      setSync('synced');
+      // Never re-render while the user is typing in a field — it would steal
+      // focus and revert their text (echoes of our own writes arrive async).
+      if (isEditingField()) return;
       if (Array.isArray(d.board)) { const b = ensureSubtasks(d.board); const json = JSON.stringify(b); if (json !== lastPushed) { BOARD = b; saveLocal(); if (!editing) refreshAll(); } }
       else if (d.tasks) { applyLegacy(BOARD, d.tasks); saveLocal(); pushBoard(); refreshAll(); }
-      setSync('synced');
     }, (err) => { console.warn('listen failed', err); setSync('error'); });
   } catch (e) { console.warn('Firebase unavailable — local mode.', e); setSync('local'); }
 }
