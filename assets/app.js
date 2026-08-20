@@ -301,16 +301,20 @@ function taskRowHTML(t) {
   return html;
 }
 
+const blankCells = () => DAYS.map((d) => `<div class="g-cell blank ${d.isWeekend ? 'wknd' : ''} ${d.isToday ? 'today' : ''}"></div>`).join('');
+
 // Render a parent's sub-tasks, grouped by their `group` (ungrouped first,
-// then a small header per group — TA / Management / OPS, etc.).
+// then a small header per group). Rows are edited inline — no Edit mode needed:
+// type in the title, ✕ to delete, + to add.
 function subRowsHTML(parent) {
   const order = []; const map = new Map();
   for (const s of (parent.subtasks || [])) { const g = s.group || ''; if (!map.has(g)) { map.set(g, []); order.push(g); } map.get(g).push(s); }
   let out = '';
   for (const g of order) {
-    if (g) out += `<div class="g-row subgroup"><div class="g-info subgroup-info">${esc(g)}</div>${DAYS.map((d) => `<div class="g-cell blank ${d.isWeekend ? 'wknd' : ''} ${d.isToday ? 'today' : ''}"></div>`).join('')}</div>`;
+    if (g) out += `<div class="g-row subgroup"><div class="g-info subgroup-info"><span>${esc(g)}</span><button class="sub-addg" data-subaddgroup="${parent.id}" data-group="${escAttr(g)}" title="Add a sub-task to ${esc(g)}">+</button></div>${blankCells()}</div>`;
     out += map.get(g).map((s) => subRowHTML(s, parent)).join('');
   }
+  out += `<div class="g-row subadd"><div class="g-info"><button class="sub-addbtn" data-subaddend="${parent.id}">+ Add sub-task</button></div>${blankCells()}</div>`;
   return out;
 }
 
@@ -319,12 +323,11 @@ function subRowHTML(s, parent) {
   return `<div class="g-row sub ${done ? 'done' : ''}" data-row="${s.id}">
       <div class="g-info sub-info">
         <span class="sub-dot"></span>
-        <div class="sub-main">
-          <div class="sub-title" title="${escAttr(s.title)}">${esc(s.title)}</div>
-          <select class="status-select mini" data-substatus="${s.id}" style="--st:${byKey[cur].color}">
-            ${STATUSES.map((o) => `<option value="${o.key}" ${o.key === cur ? 'selected' : ''}>${o.key === 'NS' ? '—' : o.key}</option>`).join('')}
-          </select>
-        </div>
+        <input class="sub-title-input" data-subedit="${s.id}" value="${escAttr(s.title)}" placeholder="Sub-task…">
+        <select class="status-select mini" data-substatus="${s.id}" style="--st:${byKey[cur].color}">
+          ${STATUSES.map((o) => `<option value="${o.key}" ${o.key === cur ? 'selected' : ''}>${o.key === 'NS' ? '—' : o.key}</option>`).join('')}
+        </select>
+        <button class="sub-del" data-subdelrow="${s.id}" title="Delete sub-task">✕</button>
       </div>${cellsHTML(s, parent)}
     </div>`;
 }
@@ -484,6 +487,10 @@ function wireBoard() {
     const b = (a) => e.target.closest(`[${a}]`);
     let n;
     if ((n = e.target.closest('.g-cell')) && n.dataset.cell) { openDayMenu(n, n.dataset.cell, n.dataset.iso); return; }
+    // inline sub-task controls (work without Edit mode)
+    if ((n = b('data-subdelrow'))) { const f = findAny(n.dataset.subdelrow); if (f && f.parentTask) { const i = f.parentTask.subtasks.indexOf(f.node); if (i >= 0) { f.parentTask.subtasks.splice(i, 1); commit(); refreshAll(); } } return; }
+    if ((n = b('data-subaddend'))) { const t = findTask(n.dataset.subaddend).t; t.subtasks = t.subtasks || []; t.subtasks.push({ id: uid('s-'), title: '', status: 'NS', note: '', days: {} }); commit(); refreshAll(); const inp = $(`.g-row[data-row="${CSS.escape(t.subtasks[t.subtasks.length - 1].id)}"] .sub-title-input`); if (inp) inp.focus(); return; }
+    if ((n = b('data-subaddgroup'))) { const t = findTask(n.dataset.subaddgroup).t; t.subtasks = t.subtasks || []; const s = { id: uid('s-'), title: '', group: n.dataset.group, status: 'NS', note: '', days: {} }; t.subtasks.push(s); commit(); refreshAll(); const inp = $(`.g-row[data-row="${CSS.escape(s.id)}"] .sub-title-input`); if (inp) inp.focus(); return; }
     if ((n = b('data-toggle'))) { const id = n.dataset.toggle; expanded.has(id) ? expanded.delete(id) : expanded.add(id); rebuildBoard(); return; }
     if ((n = b('data-mstoggle'))) { const id = n.dataset.mstoggle; collapsed.has(id) ? collapsed.delete(id) : collapsed.add(id); rebuildBoard(); return; }
     // edit ops
@@ -511,7 +518,8 @@ function wireBoard() {
       if (f === 'title') { const row = wrap.querySelector(`.g-row[data-row="${CSS.escape(id)}"] .g-title span`); if (row) row.textContent = n.value; }
       return;
     }
-    if (n.classList.contains('ef-stitle')) { const t = findTask(n.dataset.stid).t; const s = t.subtasks[+n.dataset.sidx]; if (s) { s.title = n.value; commit(); const row = wrap.querySelector(`.g-row[data-row="${CSS.escape(s.id)}"] .sub-title`); if (row) row.textContent = n.value; } return; }
+    if (n.classList.contains('ef-stitle')) { const t = findTask(n.dataset.stid).t; const s = t.subtasks[+n.dataset.sidx]; if (s) { s.title = n.value; commit(); } return; }
+    if (n.classList.contains('sub-title-input')) { const f = findAny(n.dataset.subedit); if (f) { f.node.title = n.value; commit(); } return; }
     if (n.dataset.mf && n.dataset.mid) { setMsField(n.dataset.mid, n.dataset.mf, n.value); return; }
     if (n.classList.contains('ef-oname')) { const f = findTask(n.dataset.oid); const o = f.t.owners[+n.dataset.oidx]; if (o) { o.who = n.value; commit(); } return; }
     if (n.classList.contains('ef-gitems')) { findTask(n.dataset.gid).t.detail[n.dataset.gkey] = n.value.split('\n').map((x) => x.trim()).filter(Boolean); commit(); return; }
