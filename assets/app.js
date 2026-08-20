@@ -232,7 +232,7 @@ const expanded = new Set();
 function headerHTML() {
   const weeks = WEEK_GROUPS.map((w) => `<div class="g-week" style="flex-basis:${w.days.length * 34}px"><span class="wk">${esc(w.label)}</span><span class="rg">${esc(w.range)}</span></div>`).join('');
   const days = DAYS.map((d) => `<div class="g-day ${d.isWeekend ? 'wknd' : ''} ${d.isToday ? 'today' : ''} ${d.isMonthStart ? 'mstart' : ''}"><span class="mo">${d.dayNum === 1 || d === DAYS[0] ? MONTHS[d.month] : ''}</span><span class="dn">${d.dayNum}</span><span class="dw">${WD[d.dow]}</span></div>`).join('');
-  return `<div class="g-header"><div class="g-corner"><span>Task</span><span class="hint">${editing ? 'edit mode — click a task title to edit it' : 'click a day cell to set its status'}</span></div>
+  return `<div class="g-header"><div class="g-corner"><span>Task</span><span class="hint">${editing ? 'edit mode — click a task title to edit it' : 'click a day cell to set its status'}</span><div class="col-resizer" title="Drag to widen the task column"></div></div>
       <div class="g-headcols"><div class="g-weeks">${weeks}</div><div class="g-days">${days}</div></div></div>`;
 }
 
@@ -323,7 +323,7 @@ function subRowHTML(s, parent) {
   return `<div class="g-row sub ${done ? 'done' : ''}" data-row="${s.id}">
       <div class="g-info sub-info">
         <span class="sub-dot"></span>
-        <input class="sub-title-input" data-subedit="${s.id}" value="${escAttr(s.title)}" placeholder="Sub-task…">
+        <textarea class="sub-title-input" data-subedit="${s.id}" rows="1" placeholder="Sub-task…">${esc(s.title)}</textarea>
         <select class="status-select mini" data-substatus="${s.id}" style="--st:${byKey[cur].color}">
           ${STATUSES.map((o) => `<option value="${o.key}" ${o.key === cur ? 'selected' : ''}>${o.key === 'NS' ? '—' : o.key}</option>`).join('')}
         </select>
@@ -437,8 +437,10 @@ function rebuildBoard() {
   if (editing) html += `<div class="g-addms"><button class="ef-add big" id="add-ms">+ Add milestone</button></div>`;
   if (wrap) wrap.innerHTML = `<div class="gantt">${html}</div>`;
   $('#empty').style.display = anyVisible ? 'none' : 'block';
-  if (wrap) wrap.scrollLeft = prevScroll;
+  if (wrap) { wrap.scrollLeft = prevScroll; wrap.querySelectorAll('.sub-title-input').forEach(autoGrow); }
 }
+// Grow a sub-task title field to fit its wrapped text (full text always visible).
+function autoGrow(el) { el.style.height = 'auto'; el.style.height = Math.max(28, el.scrollHeight) + 'px'; }
 function refreshAll() { renderHero(); rebuildBoard(); renderGuide(); }
 
 /* ---------------- edit operations ---------------- */
@@ -483,6 +485,26 @@ function openDayMenu(cell, id, iso) {
 function wireBoard() {
   const wrap = $('#gantt-wrap');
 
+  // Drag the header divider to widen/narrow the Task column (persisted).
+  wrap.addEventListener('mousedown', (e) => {
+    if (!e.target.closest('.col-resizer')) return;
+    e.preventDefault();
+    const startX = e.clientX;
+    const startW = parseInt(getComputedStyle(document.documentElement).getPropertyValue('--g-info')) || 264;
+    document.body.classList.add('col-resizing');
+    const move = (ev) => { const w = Math.max(180, Math.min(640, startW + (ev.clientX - startX))); document.documentElement.style.setProperty('--g-info', w + 'px'); };
+    const up = () => {
+      document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up);
+      document.body.classList.remove('col-resizing');
+      localStorage.setItem('tracker-info-w', getComputedStyle(document.documentElement).getPropertyValue('--g-info').trim());
+      wrap.querySelectorAll('.sub-title-input').forEach(autoGrow);
+    };
+    document.addEventListener('mousemove', move); document.addEventListener('mouseup', up);
+  });
+
+  // Enter in a sub-task title confirms (no newline in a title).
+  wrap.addEventListener('keydown', (e) => { if (e.target.classList.contains('sub-title-input') && e.key === 'Enter') { e.preventDefault(); e.target.blur(); } });
+
   wrap.addEventListener('click', (e) => {
     const b = (a) => e.target.closest(`[${a}]`);
     let n;
@@ -519,7 +541,7 @@ function wireBoard() {
       return;
     }
     if (n.classList.contains('ef-stitle')) { const t = findTask(n.dataset.stid).t; const s = t.subtasks[+n.dataset.sidx]; if (s) { s.title = n.value; commit(); } return; }
-    if (n.classList.contains('sub-title-input')) { const f = findAny(n.dataset.subedit); if (f) { f.node.title = n.value; commit(); } return; }
+    if (n.classList.contains('sub-title-input')) { const f = findAny(n.dataset.subedit); if (f) { f.node.title = n.value; autoGrow(n); commit(); } return; }
     if (n.dataset.mf && n.dataset.mid) { setMsField(n.dataset.mid, n.dataset.mf, n.value); return; }
     if (n.classList.contains('ef-oname')) { const f = findTask(n.dataset.oid); const o = f.t.owners[+n.dataset.oidx]; if (o) { o.who = n.value; commit(); } return; }
     if (n.classList.contains('ef-gitems')) { findTask(n.dataset.gid).t.detail[n.dataset.gkey] = n.value.split('\n').map((x) => x.trim()).filter(Boolean); commit(); return; }
@@ -641,6 +663,7 @@ async function initRemote() {
 }
 
 /* ---------------- boot ---------------- */
+const savedInfoW = localStorage.getItem('tracker-info-w'); if (savedInfoW) document.documentElement.style.setProperty('--g-info', savedInfoW);
 renderHeader(); renderLegend(); renderFilters(); renderGuide(); wireTabs();
 $('#board').innerHTML = '<div class="gantt-wrap" id="gantt-wrap"></div><datalist id="rolelist"><option value="POC1"><option value="POC2"><option value="Management"><option value="Ops"><option value="TA"></datalist><datalist id="grouplist"><option value="Management"><option value="Ops"><option value="TA"></datalist>';
 renderHero(); rebuildBoard(); wireBoard(); wireToolbar(); setSync('local'); initRemote();
