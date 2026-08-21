@@ -126,10 +126,27 @@ const allTasks = () => BOARD.flatMap((m) => m.tasks.map((t) => ({ t, m })));
 const findTask = (id) => { for (let mi = 0; mi < BOARD.length; mi++) { const ti = BOARD[mi].tasks.findIndex((t) => t.id === id); if (ti >= 0) return { mi, ti, m: BOARD[mi], t: BOARD[mi].tasks[ti] }; } return null; };
 const findMs = (id) => { const mi = BOARD.findIndex((m) => m.id === id); return mi < 0 ? null : { mi, m: BOARD[mi] }; };
 
+/* ---- local version history (per browser) — protects against data loss ---- */
+const HISTORY_KEY = 'thaiaudio-p2-history.v1';
+let HISTORY = (() => { try { return JSON.parse(localStorage.getItem(HISTORY_KEY)) || []; } catch { return []; } })();
+let lastSnapAt = 0;
+function saveHistory() { try { localStorage.setItem(HISTORY_KEY, JSON.stringify(HISTORY)); } catch {} }
+function unitCount() { let n = 0; for (const m of BOARD) for (const t of m.tasks) n += (t.subtasks && t.subtasks.length) ? t.subtasks.length : 1; return n; }
+function snapshot(force) {
+  const now = Date.now();
+  if (!force && now - lastSnapAt < 30000) return;       // at most one auto-snapshot per 30s
+  const json = JSON.stringify(BOARD);
+  if (HISTORY.length && HISTORY[0].board === json) { lastSnapAt = now; return; }
+  HISTORY.unshift({ t: now, board: json, units: unitCount() });
+  if (HISTORY.length > 40) HISTORY.length = 40;
+  saveHistory(); lastSnapAt = now;
+}
+
 /* mutate + persist */
 let remotePushTimer, lastPushed = '';
 function commit(sync = true) {
   saveLocal();
+  snapshot(false);
   if (sync && remote) { clearTimeout(remotePushTimer); remotePushTimer = setTimeout(pushBoard, 350); }
 }
 function pushBoard() {
@@ -599,6 +616,63 @@ function renderGuide() {
       <h3 class="guide-h">Milestones — อธิบายทีละช่วง</h3>${msCards}</div>`;
 }
 
+/* ---------------- Excel export (.xls HTML table) ---------------- */
+function exportExcel() {
+  const dayHead = DAYS.map((d) => `<th style="background:#eef;">${MONTHS[d.month]} ${d.dayNum}</th>`).join('');
+  const head = `<tr style="background:#4f46e5;color:#fff;font-weight:bold;">
+    <th>Milestone</th><th>Task</th><th>Sub-task</th><th>Group</th><th>Owners</th><th>Status</th>${dayHead}<th>Notes</th></tr>`;
+  const cellFor = (st) => st ? `<td align="center" style="background:${byKey[st].color};color:#fff;font-weight:bold;">${st}</td>` : '<td></td>';
+  const notesFor = (node) => Object.entries(node.dayNotes || {}).map(([iso, v]) => { const dd = new Date(iso + 'T00:00:00'); return `${MONTHS[dd.getMonth()]} ${dd.getDate()}: ${v}`; }).join(' | ');
+  const ownersFor = (t) => (t.owners || []).map((o) => `${o.role}: ${o.who}`).join('; ');
+  let rows = '';
+  for (const m of BOARD) for (const t of m.tasks) {
+    const hasSub = t.subtasks && t.subtasks.length;
+    if (hasSub) {
+      rows += `<tr style="font-weight:bold;background:#f2f2fb;"><td>${esc(m.name)}</td><td>${esc(t.title)}</td><td></td><td></td><td>${esc(ownersFor(t))}</td><td>${effStatus(t)}</td>${DAYS.map((d) => cellFor(parentCellStatus(t, d))).join('')}<td>${esc(notesFor(t))}</td></tr>`;
+      for (const s of t.subtasks) rows += `<tr><td></td><td>${esc(t.title)}</td><td>${esc(s.title)}</td><td>${esc(s.group || '')}</td><td></td><td>${s.status || ''}</td>${DAYS.map((d) => cellFor(dayStatusOfNode(s, t, d))).join('')}<td>${esc(notesFor(s))}</td></tr>`;
+    } else {
+      rows += `<tr><td>${esc(m.name)}</td><td>${esc(t.title)}</td><td></td><td></td><td>${esc(ownersFor(t))}</td><td>${t.status || ''}</td>${DAYS.map((d) => cellFor(dayStatusOfNode(t, t, d))).join('')}<td>${esc(notesFor(t))}</td></tr>`;
+    }
+  }
+  const html = `<html xmlns:x="urn:schemas-microsoft-com:office:excel"><head><meta charset="utf-8"></head><body><table border="1" cellspacing="0">${head}${rows}</table></body></html>`;
+  const blob = new Blob(['﻿' + html], { type: 'application/vnd.ms-excel' });
+  const a = el('a'); a.href = URL.createObjectURL(blob); a.download = 'thaiaudio-p2-tracker.xls'; a.click(); URL.revokeObjectURL(a.href);
+  toast('Exported to Excel (.xls)');
+}
+
+/* ---------------- History / restore ---------------- */
+function timeAgo(t) {
+  const s = Math.round((Date.now() - t) / 1000);
+  if (s < 60) return 'just now';
+  if (s < 3600) return Math.floor(s / 60) + ' min ago';
+  if (s < 86400) return Math.floor(s / 3600) + ' hr ago';
+  return Math.floor(s / 86400) + ' days ago';
+}
+function openHistory() {
+  snapshot(true); // capture the current state so it's restorable too
+  const rows = HISTORY.length ? HISTORY.map((h, i) => `<div class="hist-row">
+      <div class="hist-info"><b>${i === 0 ? 'Current' : timeAgo(h.t)}</b><span class="hist-meta">${new Date(h.t).toLocaleString()} · ${h.units} items</span></div>
+      ${i === 0 ? '<span class="hist-cur">now</span>' : `<button class="btn" data-restore="${i}">↩ Restore</button>`}
+    </div>`).join('') : '<div class="hist-empty">No history yet — snapshots build automatically as you edit.</div>';
+  const modal = el('div', 'modal-backdrop');
+  modal.innerHTML = `<div class="modal">
+      <div class="modal-h"><b>🕘 Version history</b><button class="modal-x" title="Close">✕</button></div>
+      <p class="modal-sub">Restore an earlier version — useful if data was deleted. History is kept in this browser (${HISTORY.length} snapshots).</p>
+      <div class="hist-list">${rows}</div>
+    </div>`;
+  document.body.appendChild(modal);
+  const close = () => modal.remove();
+  modal.addEventListener('click', (e) => {
+    if (e.target === modal || e.target.closest('.modal-x')) return close();
+    const r = e.target.closest('[data-restore]'); if (!r) return;
+    const i = +r.dataset.restore;
+    if (!confirm('Restore this version? Current state is saved to history first, so you can undo.')) return;
+    snapshot(true);
+    try { BOARD = ensureSubtasks(JSON.parse(HISTORY[i].board)); saveLocal(); pushBoard(); refreshAll(); toast('Restored — synced to everyone'); } catch { toast('Could not restore'); }
+    close();
+  });
+}
+
 /* ---------------- toolbar ---------------- */
 function wireToolbar() {
   $('#f-search').addEventListener('input', rebuildBoard);
@@ -645,13 +719,16 @@ function wireToolbar() {
   $('#import').addEventListener('click', () => $('#import-file').click());
   $('#import-file').addEventListener('change', (e) => {
     const file = e.target.files[0]; if (!file) return; const r = new FileReader();
-    r.onload = () => { try { const d = JSON.parse(r.result); if (Array.isArray(d.board)) BOARD = d.board; else if (Array.isArray(d)) BOARD = d; else throw 0; ensureSubtasks(BOARD); saveLocal(); pushBoard(); refreshAll(); toast('Board imported'); } catch { toast('Could not read that file'); } e.target.value = ''; };
+    r.onload = () => { try { const d = JSON.parse(r.result); snapshot(true); if (Array.isArray(d.board)) BOARD = d.board; else if (Array.isArray(d)) BOARD = d; else throw 0; ensureSubtasks(BOARD); saveLocal(); pushBoard(); refreshAll(); toast('Board imported'); } catch { toast('Could not read that file'); } e.target.value = ''; };
     r.readAsText(file);
   });
   $('#reset').addEventListener('click', () => {
     if (!confirm('Reset the board back to the original plan? This discards all edits and progress' + (remote ? ' for everyone.' : '.'))) return;
-    BOARD = seedBoard(); saveLocal(); pushBoard(); refreshAll(); toast('Board reset to original');
+    snapshot(true); BOARD = seedBoard(); saveLocal(); pushBoard(); refreshAll(); toast('Board reset to original');
   });
+
+  $('#excel-btn').addEventListener('click', exportExcel);
+  $('#history-btn').addEventListener('click', openHistory);
 
   const themeBtn = $('#theme');
   const savedTheme = localStorage.getItem('tracker-theme'); if (savedTheme) document.documentElement.setAttribute('data-theme', savedTheme);
@@ -695,7 +772,13 @@ async function initRemote() {
       // Never re-render while the user is typing in a field — it would steal
       // focus and revert their text (echoes of our own writes arrive async).
       if (isEditingField()) return;
-      if (Array.isArray(d.board)) { const b = ensureSubtasks(d.board); const json = JSON.stringify(b); if (json !== lastPushed) { BOARD = b; saveLocal(); if (!editing) refreshAll(); } }
+      if (Array.isArray(d.board)) { const b = ensureSubtasks(d.board); const json = JSON.stringify(b); if (json !== lastPushed) {
+        // safety: if an incoming change wipes most of the board (a bad delete),
+        // checkpoint the current good state locally first so it can be restored.
+        const newUnits = b.reduce((n, m) => n + (m.tasks || []).reduce((k, t) => k + ((t.subtasks && t.subtasks.length) ? t.subtasks.length : 1), 0), 0);
+        const cur = unitCount(); if (cur > 5 && newUnits < cur * 0.5) snapshot(true);
+        BOARD = b; saveLocal(); if (!editing) refreshAll();
+      } }
       else if (d.tasks) { applyLegacy(BOARD, d.tasks); saveLocal(); pushBoard(); refreshAll(); }
     }, (err) => { console.warn('listen failed', err); setSync('error'); });
   } catch (e) { console.warn('Firebase unavailable — local mode.', e); setSync('local'); }

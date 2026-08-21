@@ -352,6 +352,23 @@ footer .save-note { display: inline-flex; align-items: center; gap: 6px; }
 body.editing .g-row .g-title { cursor: default; }
 @media (max-width: 620px) { .ef-2 { grid-template-columns: 1fr; } }
 
+/* ================= Modal / history ================= */
+.modal-backdrop { position: fixed; inset: 0; z-index: 300; background: rgba(15,23,42,.5); backdrop-filter: blur(2px); display: grid; place-items: center; padding: 20px; }
+.modal { width: min(520px, 96vw); max-height: 84vh; overflow: auto; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow-lg); padding: 18px 20px; }
+.modal-h { display: flex; align-items: center; justify-content: space-between; font-size: 1.05rem; }
+.modal-x { border: 0; background: transparent; color: var(--text-mut); font-size: 1.1rem; cursor: pointer; border-radius: 8px; width: 32px; height: 32px; }
+.modal-x:hover { background: var(--surface-2); color: var(--text); }
+.modal-sub { font-size: .82rem; color: var(--text-soft); margin: 6px 0 14px; }
+.hist-list { display: flex; flex-direction: column; gap: 6px; }
+.hist-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-2); }
+.hist-info { display: flex; flex-direction: column; }
+.hist-info b { font-size: .88rem; }
+.hist-meta { font-size: .72rem; color: var(--text-mut); }
+.hist-cur { font-size: .72rem; font-weight: 700; color: var(--brand); }
+.hist-empty { text-align: center; color: var(--text-mut); padding: 24px; font-size: .85rem; }
+#history-btn { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 35%, var(--border)); font-weight: 650; }
+#excel-btn { color: #16a34a; border-color: color-mix(in srgb, #22c55e 35%, var(--border)); font-weight: 650; }
+
 /* ================= Tabs ================= */
 .tabs { display: flex; gap: 6px; margin: 22px 0 4px; border-bottom: 1px solid var(--border); }
 .tab {
