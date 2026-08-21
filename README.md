@@ -104,6 +104,20 @@ Every push to the connected branch now redeploys automatically.
 2. Drag this project folder (the one containing `index.html`) onto the page.
 3. Done — you get an instant live URL. (Re-drag to update; no auto-deploy.)
 
+### Option D — GitHub Pages (free, auto-deploy on push)
+
+This repo includes `.github/workflows/pages.yml`, which publishes the site to
+GitHub Pages on every push.
+
+1. In the repo on GitHub: **Settings → Pages → Build and deployment → Source =
+   “GitHub Actions”** (one-time).
+2. Push to the deploy branch (the workflow also runs from `main`). The Action
+   builds and deploys automatically.
+3. Live URL: **https://ppakawat1997-dev.github.io/HOBI_Seminar/**
+
+All asset paths are relative, so it works under the `/HOBI_Seminar/` sub-path,
+and Firebase sync works the same from the github.io domain.
+
 ### Option C — Netlify CLI
 
 ```bash
