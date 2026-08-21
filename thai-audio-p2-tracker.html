@@ -1947,7 +1947,15 @@ function openDayMenu(cell, id, iso) {
 
 /* ---------------- instant note tooltip (hover) ---------------- */
 let noteTip = null, noteTipCell = null;
-function ensureNoteTip() { if (!noteTip) { noteTip = el('div', 'note-tip'); noteTip.style.display = 'none'; document.body.appendChild(noteTip); } return noteTip; }
+function ensureNoteTip() {
+  if (!noteTip) { noteTip = el('div', 'note-tip'); noteTip.style.display = 'none'; }
+  // Live inside #board (like the day-menu): native fullscreen renders only the
+  // fullscreen element's descendants, and in the CSS-overlay fallback #board is
+  // a z-index:200 stacking context — either way a tip on <body> would be hidden.
+  const host = $('#board') || document.body;
+  if (noteTip.parentNode !== host) host.appendChild(noteTip);
+  return noteTip;
+}
 function showNoteTip(cell) {
   const txt = cell.dataset.note; if (!txt) return;
   const tip = ensureNoteTip(); noteTipCell = cell;
