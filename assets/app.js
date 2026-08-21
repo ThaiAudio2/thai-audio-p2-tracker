@@ -267,7 +267,7 @@ function cellsHTML(node, schedOwner) {
     const prev = i > 0 && at[i - 1] != null, next = i < DAYS.length - 1 && at[i + 1] != null;
     const note = node.dayNotes?.[d.iso];
     const cls = ['g-cell', d.isWeekend ? 'wknd' : '', d.isToday ? 'today' : '', on ? 'on' : '', on && !prev ? 'st' : '', on && !next ? 'en' : '', note ? 'noted' : ''].filter(Boolean).join(' ');
-    return `<div class="${cls}" data-cell="${node.id}" data-iso="${d.iso}" ${note ? `title="📝 ${escAttr(note)}"` : ''} ${on ? `style="--c:${byKey[st].color}"` : ''}>${on ? `<span class="cc">${st}</span>` : ''}</div>`;
+    return `<div class="${cls}" data-cell="${node.id}" data-iso="${d.iso}" ${note ? `data-note="${escAttr(note)}"` : ''} ${on ? `style="--c:${byKey[st].color}"` : ''}>${on ? `<span class="cc">${st}</span>` : ''}</div>`;
   }).join('');
 }
 // A parent day: a manual per-day override wins; else if the parent's status is
@@ -286,7 +286,7 @@ function cellsParentHTML(t) {
     const prev = i > 0 && at[i - 1] != null, next = i < DAYS.length - 1 && at[i + 1] != null;
     const note = t.dayNotes?.[d.iso];
     const cls = ['g-cell', d.isWeekend ? 'wknd' : '', d.isToday ? 'today' : '', on ? 'on' : '', on && !prev ? 'st' : '', on && !next ? 'en' : '', note ? 'noted' : ''].filter(Boolean).join(' ');
-    return `<div class="${cls}" data-cell="${t.id}" data-iso="${d.iso}" ${note ? `title="📝 ${escAttr(note)}"` : ''} ${on ? `style="--c:${byKey[st].color}"` : ''}>${on ? `<span class="cc">${st}</span>` : ''}</div>`;
+    return `<div class="${cls}" data-cell="${t.id}" data-iso="${d.iso}" ${note ? `data-note="${escAttr(note)}"` : ''} ${on ? `style="--c:${byKey[st].color}"` : ''}>${on ? `<span class="cc">${st}</span>` : ''}</div>`;
   }).join('');
 }
 
@@ -450,6 +450,7 @@ function msHeadHTML(m) {
 }
 
 function rebuildBoard() {
+  if (typeof hideNoteTip === 'function') hideNoteTip();
   const wrap = $('#gantt-wrap'); const prevScroll = wrap ? wrap.scrollLeft : 0;
   let html = headerHTML(); let anyVisible = false;
   for (const m of BOARD) {
@@ -480,7 +481,7 @@ function closeDayMenu() { if (dayMenu) { dayMenu.remove(); dayMenu = null; docum
 function outsideDayMenu(e) { if (dayMenu && !dayMenu.contains(e.target)) closeDayMenu(); }
 function escDayMenu(e) { if (e.key === 'Escape') closeDayMenu(); }
 function openDayMenu(cell, id, iso) {
-  closeDayMenu();
+  closeDayMenu(); hideNoteTip();
   const f = findAny(id); if (!f) return;
   const node = f.node, schedOwner = f.parentTask || f.node;
   const day = DAYS.find((d) => d.iso === iso);
@@ -513,9 +514,36 @@ function openDayMenu(cell, id, iso) {
   setTimeout(() => { document.addEventListener('click', outsideDayMenu, true); document.addEventListener('keydown', escDayMenu); }, 0);
 }
 
+/* ---------------- instant note tooltip (hover) ---------------- */
+let noteTip = null, noteTipCell = null;
+function ensureNoteTip() { if (!noteTip) { noteTip = el('div', 'note-tip'); noteTip.style.display = 'none'; document.body.appendChild(noteTip); } return noteTip; }
+function showNoteTip(cell) {
+  const txt = cell.dataset.note; if (!txt) return;
+  const tip = ensureNoteTip(); noteTipCell = cell;
+  tip.textContent = '📝 ' + txt; tip.style.display = 'block';
+  const r = cell.getBoundingClientRect();
+  const w = tip.offsetWidth, h = tip.offsetHeight;
+  let left = r.left + r.width / 2 - w / 2;
+  left = Math.min(Math.max(8, left), window.innerWidth - w - 8);
+  let top = r.top - h - 8; if (top < 8) top = r.bottom + 8;
+  tip.style.left = left + 'px'; tip.style.top = top + 'px';
+}
+function hideNoteTip() { if (noteTip) noteTip.style.display = 'none'; noteTipCell = null; }
+
 /* ---------------- interactions ---------------- */
 function wireBoard() {
   const wrap = $('#gantt-wrap');
+
+  // Instant note preview on hover (replaces the slow native tooltip).
+  wrap.addEventListener('mouseover', (e) => {
+    const cell = e.target.closest('.g-cell.noted');
+    if (cell && cell !== noteTipCell) showNoteTip(cell);
+  });
+  wrap.addEventListener('mouseout', (e) => {
+    const cell = e.target.closest('.g-cell.noted');
+    if (cell && !cell.contains(e.relatedTarget)) hideNoteTip();
+  });
+  wrap.addEventListener('scroll', hideNoteTip, { passive: true });
 
   // Drag the header divider to widen/narrow the Task column (persisted).
   wrap.addEventListener('mousedown', (e) => {

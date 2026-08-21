@@ -579,6 +579,15 @@ body.board-max #gantt-wrap { max-height: none; flex: 1; }
 /* note marker on a day cell */
 .g-cell.noted::before { content: ''; position: absolute; top: 1px; right: 1px; z-index: 2; border-top: 7px solid var(--accent); border-left: 7px solid transparent; }
 
+/* instant note tooltip on hover */
+.note-tip {
+  position: fixed; z-index: 90; max-width: 280px; pointer-events: none;
+  background: var(--text); color: var(--surface);
+  font-size: .76rem; font-weight: 500; line-height: 1.4; letter-spacing: .01em;
+  padding: 7px 10px; border-radius: 8px; box-shadow: var(--shadow-lg);
+  white-space: pre-wrap; word-break: break-word;
+}
+
 /* Save button */
 #save-btn { color: var(--brand); border-color: color-mix(in srgb, var(--brand) 40%, var(--border)); font-weight: 700; }
 #save-btn:hover { border-color: var(--brand); background: color-mix(in srgb, var(--brand) 8%, transparent); }
