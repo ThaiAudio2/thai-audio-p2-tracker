@@ -1778,7 +1778,9 @@ function taskRowHTML(t) {
       // sub-tasks +add/rename/delete, schedule) — no read-only sub-day rows.
       html += `<div class="g-detail" data-detail="${t.id}"><div class="g-detail-in">${taskEditHTML(t)}</div></div>`;
     } else {
-      if (hasSub) html += subRowsHTML(t);
+      // Always show the sub-task list + "＋ Add sub-task" row, even for a task
+      // that has none yet — so any heading can gain sub-tasks without Edit mode.
+      html += subRowsHTML(t);
       html += `<div class="g-detail" data-detail="${t.id}"><div class="g-detail-in">${taskReadHTML(t)}</div></div>`;
     }
   }
