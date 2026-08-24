@@ -296,6 +296,15 @@ function cellsParentHTML(t) {
 }
 
 function taskRowHTML(t) {
+  // A brand-new heading (no title yet) shows an inline name field so it can be
+  // named right on the board — no Edit mode needed (mirrors sub-task adding).
+  if (!editing && !(t.title && t.title.trim())) {
+    return `<div class="g-row task-new" data-row="${t.id}">
+      <div class="g-info">
+        <textarea class="task-title-input" data-taskedit="${t.id}" rows="1" placeholder="ชื่อหัวข้อใหม่…">${esc(t.title || '')}</textarea>
+        <button class="sub-del" data-taskdelrow="${t.id}" title="ลบหัวข้อ">✕</button>
+      </div>${blankCells()}</div>`;
+  }
   const hasSub = t.subtasks && t.subtasks.length;
   const kind = schedKind(t); const cur = effStatus(t); const done = !!byKey[cur]?.done;
   const owners = (t.owners || []).map((o) => `<span class="owner"><b>${esc(o.role)}</b> ${esc(o.who)}</span>`).join('');
@@ -463,12 +472,17 @@ function rebuildBoard() {
     if (!visTasks.length && !editing) continue;
     anyVisible = true;
     html += msHeadHTML(m);
-    if (!collapsed.has(m.id) || editing) html += (editing ? m.tasks : visTasks).map(taskRowHTML).join('');
+    if (!collapsed.has(m.id) || editing) {
+      html += (editing ? m.tasks : visTasks).map(taskRowHTML).join('');
+      // Inline "add heading" under the milestone — works without Edit mode,
+      // just like adding a sub-task.
+      if (!editing) html += `<div class="g-row taskadd"><div class="g-info"><button class="task-addbtn" data-taskadd="${m.id}">+ เพิ่มหัวข้อ</button></div>${blankCells()}</div>`;
+    }
   }
   if (editing) html += `<div class="g-addms"><button class="ef-add big" id="add-ms">+ Add milestone</button></div>`;
   if (wrap) wrap.innerHTML = `<div class="gantt">${html}</div>`;
   $('#empty').style.display = anyVisible ? 'none' : 'block';
-  if (wrap) { wrap.scrollLeft = prevScroll; wrap.querySelectorAll('.sub-title-input').forEach(autoGrow); }
+  if (wrap) { wrap.scrollLeft = prevScroll; wrap.querySelectorAll('.sub-title-input, .task-title-input').forEach(autoGrow); }
 }
 // Grow a sub-task title field to fit its wrapped text (full text always visible).
 function autoGrow(el) { el.style.height = 'auto'; el.style.height = Math.max(28, el.scrollHeight) + 'px'; }
@@ -570,13 +584,17 @@ function wireBoard() {
       document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up);
       document.body.classList.remove('col-resizing');
       localStorage.setItem('tracker-info-w', getComputedStyle(document.documentElement).getPropertyValue('--g-info').trim());
-      wrap.querySelectorAll('.sub-title-input').forEach(autoGrow);
+      wrap.querySelectorAll('.sub-title-input, .task-title-input').forEach(autoGrow);
     };
     document.addEventListener('mousemove', move); document.addEventListener('mouseup', up);
   });
 
   // Enter in a sub-task title confirms (no newline in a title).
-  wrap.addEventListener('keydown', (e) => { if (e.target.classList.contains('sub-title-input') && e.key === 'Enter') { e.preventDefault(); e.target.blur(); } });
+  wrap.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter') return;
+    if (e.target.classList.contains('sub-title-input')) { e.preventDefault(); e.target.blur(); }
+    else if (e.target.classList.contains('task-title-input')) { e.preventDefault(); e.target.blur(); rebuildBoard(); }
+  });
 
   wrap.addEventListener('click', (e) => {
     const b = (a) => e.target.closest(`[${a}]`);
@@ -584,6 +602,7 @@ function wireBoard() {
     if ((n = e.target.closest('.g-cell')) && n.dataset.cell) { openDayMenu(n, n.dataset.cell, n.dataset.iso); return; }
     // inline sub-task controls (work without Edit mode)
     if ((n = b('data-subdelrow'))) { const f = findAny(n.dataset.subdelrow); if (f && f.parentTask) { const i = f.parentTask.subtasks.indexOf(f.node); if (i >= 0) { f.parentTask.subtasks.splice(i, 1); commit(); refreshAll(); } } return; }
+    if ((n = b('data-taskdelrow'))) { const f = findTask(n.dataset.taskdelrow); if (f && (!(f.t.title && f.t.title.trim()) || confirm(`ลบหัวข้อ "${f.t.title}" ?`))) { f.m.tasks.splice(f.ti, 1); commit(); refreshAll(); } return; }
     if ((n = b('data-subaddend'))) { const t = findTask(n.dataset.subaddend).t; t.subtasks = t.subtasks || []; t.subtasks.push({ id: uid('s-'), title: '', status: 'NS', note: '', days: {}, noAuto: true }); commit(); refreshAll(); const inp = $(`.g-row[data-row="${CSS.escape(t.subtasks[t.subtasks.length - 1].id)}"] .sub-title-input`); if (inp) inp.focus(); return; }
     if ((n = b('data-subaddgroup'))) { const t = findTask(n.dataset.subaddgroup).t; t.subtasks = t.subtasks || []; const s = { id: uid('s-'), title: '', group: n.dataset.group, status: 'NS', note: '', days: {}, noAuto: true }; t.subtasks.push(s); commit(); refreshAll(); const inp = $(`.g-row[data-row="${CSS.escape(s.id)}"] .sub-title-input`); if (inp) inp.focus(); return; }
     if ((n = b('data-toggle'))) { const id = n.dataset.toggle; expanded.has(id) ? expanded.delete(id) : expanded.add(id); rebuildBoard(); return; }
@@ -597,7 +616,7 @@ function wireBoard() {
     if ((n = b('data-gdel'))) { delete findTask(n.dataset.gdel).t.detail[n.dataset.gkey]; commit(); rebuildBoard(); return; }
     if ((n = b('data-tup')) || (n = b('data-tdown'))) { const id = (n.dataset.tup || n.dataset.tdown); const dir = n.dataset.tup ? -1 : 1; const f = findTask(id); if (move(f.m.tasks, f.ti, dir)) { commit(); rebuildBoard(); } return; }
     if ((n = b('data-tdel'))) { const f = findTask(n.dataset.tdel); if (confirm('Delete this task?')) { f.m.tasks.splice(f.ti, 1); commit(); refreshAll(); } return; }
-    if ((n = b('data-taskadd'))) { const f = findMs(n.dataset.taskadd); f.m.tasks.push({ id: uid('t-'), title: 'New task', desc: { th: '', en: '' }, owners: [], subtasks: [], detail: {}, remarks: [], schedule: null, status: 'NS', note: '', days: {} }); commit(); refreshAll(); return; }
+    if ((n = b('data-taskadd'))) { const f = findMs(n.dataset.taskadd); const nt = { id: uid('t-'), title: '', desc: { th: '', en: '' }, owners: [], subtasks: [], detail: {}, remarks: [], schedule: null, status: 'NS', note: '', days: {} }; f.m.tasks.push(nt); commit(); refreshAll(); const inp = $(`.g-row[data-row="${CSS.escape(nt.id)}"] .task-title-input`); if (inp) { inp.focus(); autoGrow(inp); } return; }
     if ((n = b('data-mup')) || (n = b('data-mdown'))) { const id = (n.dataset.mup || n.dataset.mdown); const dir = n.dataset.mup ? -1 : 1; const f = findMs(id); if (move(BOARD, f.mi, dir)) { commit(); rebuildBoard(); } return; }
     if ((n = b('data-mdel'))) { const f = findMs(n.dataset.mdel); if (confirm(`Delete milestone "${f.m.name}" and its ${f.m.tasks.length} tasks?`)) { BOARD.splice(f.mi, 1); commit(); refreshAll(); } return; }
     if (e.target.id === 'add-ms') { BOARD.push({ id: uid('m-'), no: String(BOARD.length), name: 'New milestone', phase: '', desc: { th: '', en: '' }, tasks: [] }); commit(); refreshAll(); return; }
@@ -615,6 +634,7 @@ function wireBoard() {
     }
     if (n.classList.contains('ef-stitle')) { const t = findTask(n.dataset.stid).t; const s = t.subtasks[+n.dataset.sidx]; if (s) { s.title = n.value; commit(); } return; }
     if (n.classList.contains('sub-title-input')) { const f = findAny(n.dataset.subedit); if (f) { f.node.title = n.value; autoGrow(n); commit(); } return; }
+    if (n.classList.contains('task-title-input')) { const f = findTask(n.dataset.taskedit); if (f) { f.t.title = n.value; autoGrow(n); commit(); } return; }
     if (n.dataset.mf && n.dataset.mid) { setMsField(n.dataset.mid, n.dataset.mf, n.value); return; }
     if (n.classList.contains('ef-oname')) { const f = findTask(n.dataset.oid); const o = f.t.owners[+n.dataset.oidx]; if (o) { o.who = n.value; commit(); } return; }
     if (n.classList.contains('ef-gitems')) { findTask(n.dataset.gid).t.detail[n.dataset.gkey] = n.value.split('\n').map((x) => x.trim()).filter(Boolean); commit(); return; }
@@ -736,7 +756,7 @@ function wireToolbar() {
     $('#fs-toggle').classList.toggle('on', on);
     if (on) { const b = $('#board'); if (b.requestFullscreen) b.requestFullscreen().catch(() => {}); }
     else if (document.fullscreenElement) { document.exitFullscreen().catch(() => {}); }
-    setTimeout(() => $('#gantt-wrap').querySelectorAll('.sub-title-input').forEach(autoGrow), 60);
+    setTimeout(() => $('#gantt-wrap').querySelectorAll('.sub-title-input, .task-title-input').forEach(autoGrow), 60);
   }
   $('#fs-toggle').addEventListener('click', () => setFullscreen(!document.body.classList.contains('board-max')));
   $('#fs-exit').addEventListener('click', () => setFullscreen(false));
