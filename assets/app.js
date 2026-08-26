@@ -29,10 +29,14 @@ const uid = (p) => p + Date.now().toString(36) + Math.random().toString(36).slic
 const clone = (x) => (x == null ? x : JSON.parse(JSON.stringify(x)));
 
 /* ---------------- day grid ---------------- */
+// Extra weeks the user has appended to the timeline (persisted per browser).
+let EXTRA_WEEKS = Math.max(0, parseInt(localStorage.getItem('tracker-extra-weeks') || '0', 10) || 0);
+const totalWeeks = () => GRID.weeks + EXTRA_WEEKS;
+
 function buildDays() {
   const out = [];
   const start = new Date(GRID.start + 'T00:00:00');
-  for (let i = 0; i < GRID.weeks * 7; i++) {
+  for (let i = 0; i < totalWeeks() * 7; i++) {
     const d = new Date(start); d.setDate(d.getDate() + i);
     const iso = d.toISOString().slice(0, 10);
     out.push({ iso, dow: d.getDay(), dayNum: d.getDate(), month: d.getMonth(), weekIndex: Math.floor(i / 7),
@@ -40,9 +44,24 @@ function buildDays() {
   }
   return out;
 }
-const DAYS = buildDays();
-const GRID_END = DAYS[DAYS.length - 1].iso;
-const WEEK_GROUPS = WEEKS.map((w, i) => ({ ...w, days: DAYS.filter((d) => d.weekIndex === i) }));
+// Week label/range: from the seed WEEKS for the original span, generated for any
+// week the user has appended past the end.
+function weekMeta(i) {
+  if (i < WEEKS.length) return WEEKS[i];
+  const s = new Date(GRID.start + 'T00:00:00'); s.setDate(s.getDate() + i * 7);
+  const e = new Date(s); e.setDate(e.getDate() + 6);
+  const fmt = (d) => `${MONTHS[d.getMonth()]} ${String(d.getDate()).padStart(2, '0')}`;
+  return { id: 'w' + i, label: 'W' + i, range: `${fmt(s)} – ${fmt(e)}`, start: s.toISOString().slice(0, 10) };
+}
+let DAYS, GRID_END, WEEK_GROUPS;
+function computeGrid() {
+  DAYS = buildDays();
+  GRID_END = DAYS[DAYS.length - 1].iso;
+  WEEK_GROUPS = Array.from({ length: totalWeeks() }, (_, i) => ({ ...weekMeta(i), days: DAYS.filter((d) => d.weekIndex === i) }));
+}
+computeGrid();
+// Append / remove trailing weeks (persisted); rebuilds the whole board.
+function setExtraWeeks(n) { EXTRA_WEEKS = Math.max(0, n); localStorage.setItem('tracker-extra-weeks', String(EXTRA_WEEKS)); computeGrid(); refreshAll(); }
 
 /* ---------------- board model (seed + persistence) ---------------- */
 function ownersToArray(o) {
@@ -202,7 +221,7 @@ function renderHero() {
     { n: m.done, l: 'Tasks completed', sub: `of ${m.total} total` },
     { n: m.active, l: 'In flight', sub: 'started, not done' },
     { n: BOARD.length, l: 'Milestones', sub: 'sections' },
-    { n: `${GRID.weeks}w`, l: 'On the grid', sub: 'Aug 17 – Oct 04' },
+    { n: `${totalWeeks()}w`, l: 'On the grid', sub: `${MONTHS[DAYS[0].month]} ${DAYS[0].dayNum} – ${MONTHS[DAYS[DAYS.length - 1].month]} ${DAYS[DAYS.length - 1].dayNum}` },
   ];
   $('#kpis').innerHTML = kpis.map((k) => `<div class="kpi"><div class="n">${k.n}</div><div class="l">${k.l}</div><div class="sub">${k.sub}</div></div>`).join('');
   const shown = STATUSES.filter((s) => m.dist[s.key] > 0);
@@ -324,7 +343,7 @@ function taskRowHTML(t) {
         <button class="g-title ${isExp ? 'open' : ''}" data-toggle="${t.id}">
           <svg class="tw" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M9 6l6 6-6 6"/></svg>
           <span>${esc(t.title)}</span>${hasSub ? `<span class="subcount">${t.subtasks.length}</span>` : ''}${laterTag}</button>
-        <div class="g-owner-row">${statusCtl}${owners ? `<div class="owner-tags">${owners}</div>` : ''}</div>
+        <div class="g-owner-row">${statusCtl}${owners ? `<div class="owner-tags">${owners}</div>` : ''}${!editing ? `<button class="task-del" data-taskdelrow="${t.id}" title="ลบหัวข้อนี้">✕</button>` : ''}</div>
       </div>${hasSub ? cellsParentHTML(t) : cellsHTML(t, t)}
     </div>`;
   if (isExp) {
@@ -604,7 +623,7 @@ function wireBoard() {
     if ((n = e.target.closest('.g-cell')) && n.dataset.cell) { openDayMenu(n, n.dataset.cell, n.dataset.iso); return; }
     // inline sub-task controls (work without Edit mode)
     if ((n = b('data-subdelrow'))) { const f = findAny(n.dataset.subdelrow); if (f && f.parentTask) { const i = f.parentTask.subtasks.indexOf(f.node); if (i >= 0) { f.parentTask.subtasks.splice(i, 1); commit(); refreshAll(); } } return; }
-    if ((n = b('data-taskdelrow'))) { const f = findTask(n.dataset.taskdelrow); if (f && (!(f.t.title && f.t.title.trim()) || confirm(`ลบหัวข้อ "${f.t.title}" ?`))) { f.m.tasks.splice(f.ti, 1); commit(); refreshAll(); } return; }
+    if ((n = b('data-taskdelrow'))) { const f = findTask(n.dataset.taskdelrow); if (f) { const named = f.t.title && f.t.title.trim(); const sc = (f.t.subtasks || []).length; if (!named || confirm(`ลบหัวข้อ "${f.t.title}"${sc ? ` และ ${sc} ซับทาสก์` : ''} ?`)) { f.m.tasks.splice(f.ti, 1); commit(); refreshAll(); } } return; }
     if ((n = b('data-subaddend'))) { const t = findTask(n.dataset.subaddend).t; t.subtasks = t.subtasks || []; t.subtasks.push({ id: uid('s-'), title: '', status: 'NS', note: '', days: {}, noAuto: true }); commit(); refreshAll(); const inp = $(`.g-row[data-row="${CSS.escape(t.subtasks[t.subtasks.length - 1].id)}"] .sub-title-input`); if (inp) inp.focus(); return; }
     if ((n = b('data-subaddgroup'))) { const t = findTask(n.dataset.subaddgroup).t; t.subtasks = t.subtasks || []; const s = { id: uid('s-'), title: '', group: n.dataset.group, status: 'NS', note: '', days: {}, noAuto: true }; t.subtasks.push(s); commit(); refreshAll(); const inp = $(`.g-row[data-row="${CSS.escape(s.id)}"] .sub-title-input`); if (inp) inp.focus(); return; }
     if ((n = b('data-toggle'))) { const id = n.dataset.toggle; expanded.has(id) ? expanded.delete(id) : expanded.add(id); rebuildBoard(); return; }
@@ -751,6 +770,10 @@ function wireToolbar() {
   });
   $('#expand-all').addEventListener('click', () => { collapsed.clear(); rebuildBoard(); });
   $('#collapse-all').addEventListener('click', () => { BOARD.forEach((m) => collapsed.add(m.id)); rebuildBoard(); });
+  // Extend / shrink the timeline (removing only hides added weeks — day data is
+  // kept, so re-adding a week brings its content back).
+  if ($('#add-week')) $('#add-week').addEventListener('click', () => { setExtraWeeks(EXTRA_WEEKS + 1); toast(`เพิ่มสัปดาห์ · รวม ${totalWeeks()} สัปดาห์`); });
+  if ($('#del-week')) $('#del-week').addEventListener('click', () => { if (EXTRA_WEEKS <= 0) { toast('ลบได้เฉพาะสัปดาห์ที่เพิ่มเอง'); return; } setExtraWeeks(EXTRA_WEEKS - 1); toast(`ลบสัปดาห์ · รวม ${totalWeeks()} สัปดาห์`); });
 
   // Full-screen the timeline (CSS overlay + the real Fullscreen API when allowed).
   function setFullscreen(on) {
